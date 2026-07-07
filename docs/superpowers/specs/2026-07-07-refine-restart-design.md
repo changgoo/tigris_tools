@@ -292,8 +292,10 @@ class LogicalLocation:
 
 @dataclass
 class RegionSize:
+    # Field order MUST match src/athena.hpp's RegionSize (POD; no reordering).
     x1min: float; x2min: float; x3min: float
     x1max: float; x2max: float; x3max: float
+    x1len: float; x2len: float; x3len: float   # x{i}max - x{i}min (redundant)
     x1rat: float; x2rat: float; x3rat: float
     nx1: int; nx2: int; nx3: int
 
