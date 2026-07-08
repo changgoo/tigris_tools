@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import struct
 from dataclasses import dataclass
 from pathlib import Path
-import struct
 from typing import BinaryIO
 
 import numpy as np
@@ -11,7 +11,6 @@ from . import layout
 from .param_block import ParameterBlock
 from .reader import RestartReader
 from .refine import refine_cell_centered, refine_face_x1, refine_face_x2, refine_face_x3
-
 
 NCR = 4
 

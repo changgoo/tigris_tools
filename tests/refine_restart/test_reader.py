@@ -1,3 +1,5 @@
+from io import StringIO
+
 from tigris_tools.refine_restart.layout import (
     LogicalLocation,
     MeshHeader,
@@ -5,8 +7,6 @@ from tigris_tools.refine_restart.layout import (
     pack_id_record,
     pack_mesh_header,
 )
-from io import StringIO
-
 from tigris_tools.refine_restart.reader import read_restart_index
 
 

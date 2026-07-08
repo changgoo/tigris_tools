@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import struct
+from dataclasses import dataclass
 from typing import Iterable
 
 import numpy as np
-
 
 INT_SIZE = 4
 INT_DTYPE = np.dtype("<i4")
