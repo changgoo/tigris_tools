@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tigris-tools"
+version = "0.1.0"
+description = "Standalone post-processing utilities for TIGRESS++ / Athena++ simulations"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.20",
+]
+
+[project.scripts]
+refine-restart = "tigris_tools.refine_restart.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "slow: tests requiring a TIGRESS++ executable or real checkpoint",
+]
