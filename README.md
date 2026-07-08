@@ -41,6 +41,29 @@ Current implemented scope:
 Not implemented yet: coarsening and arbitrary block repartitioning across
 multiple input parents.
 
+## TODO and Known Issues
+
+- Implement `--coarsen`.
+- Support output meshblocks larger than one refined input block per axis.
+  Current `--block-size` must divide `refine_factor * input_block_size` in
+  each direction.
+- Generalize particle schema detection. Current support covers the TIGRESS++
+  complex-particle layouts seen so far, including shear-periodic `ish`.
+- Preserve or deliberately reconstruct user MeshBlock data by semantic type.
+  Current refinement zeros/copies opaque tail bytes conservatively enough for
+  tested restarts, but module-specific counters may need better policies.
+- PRNG streams are resized and reseeded, not made statistically identical to
+  what an equivalent high-resolution run would have produced.
+- Large conversions are serial and write one temporary file next to the
+  output. Expect high wall time and enough free space for the full output.
+- Face-centered magnetic fields use a simple divergence-preserving refinement
+  rule; it is not an interpolative high-order prolongation.
+- Restart compatibility is best for double-precision Cartesian TIGRESS++
+  builds matching the source checkpoint physics. Older restart metadata can
+  be inferred, but unusual build options may need new schema code.
+- Always run `--dry-run -v` first, then restart the simulation for a short
+  smoke test before using a converted checkpoint for production.
+
 ## Usage
 
 Dry-run a conversion and print restart metadata:
