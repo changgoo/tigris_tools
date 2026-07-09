@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .convert import refine_restart
+from .figure import write_restart_comparison_figure
 from .reader import read_restart_index
 
 
@@ -28,9 +29,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("input", type=Path, help="input .rst file")
     parser.add_argument("output", type=Path, help="output .rst file")
-    mode = parser.add_mutually_exclusive_group(required=True)
+    mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--refine", type=int, metavar="N", help="uniform refinement factor")
     mode.add_argument("--coarsen", type=int, metavar="N", help="uniform coarsening factor")
+    mode.add_argument(
+        "--figure-only",
+        action="store_true",
+        help="read input and output restart files and write --figure without converting",
+    )
     parser.add_argument(
         "--block-size",
         type=_parse_block_size,
@@ -39,6 +45,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--seed", type=int, metavar="U64", help="PRNG top seed override")
     parser.add_argument("--verify", action="store_true", help="re-read output and verify structure")
+    parser.add_argument("--figure", type=Path, metavar="PNG", help="write a quick comparison figure")
+    parser.add_argument(
+        "--figure-slice",
+        default="x3:mid",
+        metavar="AXIS:INDEX",
+        help="slice for --figure, for example x3:mid or x1:16",
+    )
     parser.add_argument("--dry-run", action="store_true", help="plan conversion without writing")
     parser.add_argument("-v", "--verbose", action="count", default=0)
     return parser
@@ -47,6 +60,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.figure_only:
+        if args.figure is None:
+            parser.error("--figure-only requires --figure")
+        write_restart_comparison_figure(
+            args.input,
+            args.output,
+            args.figure,
+            slice_spec=args.figure_slice,
+            verbose=args.verbose,
+        )
+        return 0
+
     factor = args.refine if args.refine is not None else args.coarsen
     if factor is None or factor <= 0:
         parser.error("refine/coarsen factor must be positive")
@@ -87,5 +112,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.coarsen is not None:
         parser.exit(2, "refine_restart: --coarsen is not implemented yet\n")
-    refine_restart(args.input, args.output, factor=factor, block_size=args.block_size, verbose=args.verbose)
+    refine_restart(
+        args.input,
+        args.output,
+        factor=factor,
+        block_size=args.block_size,
+        figure_path=args.figure,
+        figure_slice=args.figure_slice,
+        verbose=args.verbose,
+    )
     return 0

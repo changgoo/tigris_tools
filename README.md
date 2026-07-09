@@ -23,6 +23,12 @@ For local development without installing:
 PYTHONPATH=src python -m tigris_tools.refine_restart --help
 ```
 
+To use comparison figures, install the optional plotting dependency:
+
+```sh
+python -m pip install -e ".[figure]"
+```
+
 ## Tools
 
 - **refine_restart** — read a TIGRESS++ restart checkpoint and produce a new
@@ -188,6 +194,19 @@ qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
 It writes slice figures under `$run/cr_slices/` and snapshot figures under
 `$run/snapshot/`. The older `generate_all_restart_slices.pbs` remains available
 when only serial slice products are wanted.
+
+Write a quick slice comparison figure while converting:
+
+```sh
+refine-restart INPUT.rst OUT.rst --refine 2 --figure compare.png --figure-slice x3:mid
+```
+
+Generate the same figure from an existing coarse/refined restart pair without
+writing a new checkpoint:
+
+```sh
+refine-restart INPUT.rst REFINED.rst --figure-only --figure compare.png --figure-slice x3:mid
+```
 
 ## Development
 

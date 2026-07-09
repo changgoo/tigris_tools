@@ -12,6 +12,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+figure = [
+  "matplotlib",
+]
 dev = [
   "pytest",
   "ruff",

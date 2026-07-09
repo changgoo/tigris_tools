@@ -8,6 +8,7 @@ from typing import BinaryIO
 import numpy as np
 
 from . import layout
+from .figure import ComparisonFigure, require_matplotlib
 from .param_block import ParameterBlock
 from .reader import RestartReader
 from .refine import refine_cell_centered, refine_face_x1, refine_face_x2, refine_face_x3
@@ -34,6 +35,8 @@ def refine_restart(
     factor: int = 2,
     *,
     block_size: tuple[int, int, int] | None = None,
+    figure_path: str | Path | None = None,
+    figure_slice: str = "x3:mid",
     verbose: int = 0,
 ) -> None:
     if factor != 2:
@@ -53,6 +56,20 @@ def refine_restart(
         )
         out_blocks_per_parent = chunks_per_parent[0] * chunks_per_parent[1] * chunks_per_parent[2]
         out_nbtotal = len(index.blocks) * out_blocks_per_parent
+        figure = (
+            ComparisonFigure(
+                index.header,
+                out_header,
+                schema.block_size,
+                out_block_size,
+                factor,
+                figure_slice,
+            )
+            if figure_path is not None
+            else None
+        )
+        if figure is not None:
+            require_matplotlib()
         output_path = Path(output_path)
         tmp_path = output_path.with_suffix(output_path.suffix + ".tmp")
         try:
@@ -70,6 +87,7 @@ def refine_restart(
                     chunks_per_parent,
                     out_header.root_level,
                     factor,
+                    figure,
                     verbose,
                 )
                 _write_prng(out, schema, out_nbtotal)
@@ -77,6 +95,8 @@ def refine_restart(
                 for loc, size in records:
                     out.write(layout.pack_id_record(loc, 1.0, size))
             tmp_path.replace(output_path)
+            if figure is not None:
+                figure.save(figure_path)
         except Exception:
             try:
                 tmp_path.unlink(missing_ok=True)
@@ -151,14 +171,19 @@ def _write_refined_payloads(
     chunks_per_parent: tuple[int, int, int],
     out_root_level: int,
     factor: int,
+    figure: ComparisonFigure | None,
     verbose: int,
 ) -> list[tuple[layout.LogicalLocation, int]]:
     assert reader.index is not None
     records: list[tuple[layout.LogicalLocation, int]] = []
     for parent_index, block in enumerate(reader.index.blocks):
         payload = _parse_payload(reader.read_block_bytes(block), schema)
+        refined = _refined_payload(payload, factor)
+        if figure is not None:
+            figure.add_block(block.loc, payload, refined)
         children = _split_refined_payload(
             payload,
+            refined,
             block.loc,
             reader.index.header,
             schema,
@@ -230,6 +255,7 @@ def _parse_payload(data: bytes, schema: RestartSchema) -> dict[str, object]:
 
 def _split_refined_payload(
     payload: dict[str, object],
+    refined: dict[str, object],
     parent_loc: layout.LogicalLocation,
     header: layout.MeshHeader,
     schema: RestartSchema,
@@ -238,16 +264,6 @@ def _split_refined_payload(
     out_root_level: int,
     factor: int,
 ):
-    refined = {
-        "hydro": refine_cell_centered(payload["hydro"], factor),
-        "cr": refine_cell_centered(payload["cr"], factor) if payload["cr"] is not None else None,
-        "scalars": refine_cell_centered(payload["scalars"], factor)
-        if payload["scalars"] is not None
-        else None,
-        "bx1": refine_face_x1(payload["bx1"], factor) if payload["bx1"] is not None else None,
-        "bx2": refine_face_x2(payload["bx2"], factor) if payload["bx2"] is not None else None,
-        "bx3": refine_face_x3(payload["bx3"], factor) if payload["bx3"] is not None else None,
-    }
     children = []
     parent_bounds = _parent_bounds(parent_loc, header, schema.block_size)
     for cz in range(chunks_per_parent[2]):
@@ -279,6 +295,19 @@ def _split_refined_payload(
                     )
                 )
     return children
+
+
+def _refined_payload(payload: dict[str, object], factor: int) -> dict[str, object]:
+    return {
+        "hydro": refine_cell_centered(payload["hydro"], factor),
+        "cr": refine_cell_centered(payload["cr"], factor) if payload["cr"] is not None else None,
+        "scalars": refine_cell_centered(payload["scalars"], factor)
+        if payload["scalars"] is not None
+        else None,
+        "bx1": refine_face_x1(payload["bx1"], factor) if payload["bx1"] is not None else None,
+        "bx2": refine_face_x2(payload["bx2"], factor) if payload["bx2"] is not None else None,
+        "bx3": refine_face_x3(payload["bx3"], factor) if payload["bx3"] is not None else None,
+    }
 
 
 def _pack_child(
