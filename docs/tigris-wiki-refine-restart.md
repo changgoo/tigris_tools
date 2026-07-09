@@ -108,6 +108,38 @@ output blocks:    64 blocks of 64^3
 The second mode is useful when the downstream run should keep the same number
 of MeshBlocks or MPI ranks.
 
+## Comparison Figures
+
+Install the optional plotting dependency before using figure output:
+
+```sh
+python -m pip install -e ".[figure]"
+```
+
+Write a quick visual comparison while creating the refined restart:
+
+```sh
+refine-restart INPUT.rst OUT.rst --refine 2 --figure compare.png --figure-slice x3:mid
+```
+
+The figure assembles the selected global slice from active cells, omitting
+ghost zones. Rows include density, velocity magnitude, magnetic-field
+magnitude and `divB` when MHD is enabled, CR energy density when CR is enabled,
+and scalar 0 when passive scalars are present. Columns show the input slice,
+the refined slice, and the refined data coarsened back to input resolution
+minus the input data. MeshBlock boundaries are overlaid, and particles on the
+selected slice are colored by their owning MeshBlock in the first row.
+
+To regenerate the same diagnostic from an existing input/refined restart pair
+without writing a new checkpoint:
+
+```sh
+refine-restart INPUT.rst REFINED.rst --figure-only --figure compare.png --figure-slice x3:mid
+```
+
+Use `--figure-slice AXIS:INDEX` with `x1`, `x2`, or `x3`; `mid` selects the
+middle active-cell index along that axis.
+
 ## Restarting from the New File
 
 Place the generated restart file where the TIGRESS++ run expects it, then use
