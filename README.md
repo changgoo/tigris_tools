@@ -28,6 +28,10 @@ PYTHONPATH=src python -m tigris_tools.refine_restart --help
   simulation can restart from it without any code changes. See
   [`docs/refine_restart.md`](docs/refine_restart.md) for the full
   description.
+- **restart_slices** — reconstruct central slice caches
+  directly from restart output for `TIGRESS-CR` summary plots. See
+  [`docs/restart_slices.md`](docs/restart_slices.md) for the compatibility
+  contract and implementation status.
 
 Current implemented scope:
 
@@ -93,6 +97,72 @@ Equivalent module invocation:
 ```sh
 python -m tigris_tools.refine_restart INPUT.rst OUT.rst --refine 2
 ```
+
+Repair a restart affected by rank-dependent writer offsets, using its
+same-cycle particle dump as an independent block-boundary check:
+
+```sh
+repair-restart INPUT.rst SAME_CYCLE.parbin OUTPUT.repaired.rst --dry-run
+repair-restart INPUT.rst SAME_CYCLE.parbin OUTPUT.repaired.rst -v
+```
+
+The repair command never overwrites an existing file. See
+[`docs/restart_slices.md`](docs/restart_slices.md#repairing-affected-checkpoints)
+for the recovery assumptions and native validation procedure.
+
+Create the central `y=0` and `z=0` NetCDF caches and a raw-array validation
+plot from a normal restart:
+
+```sh
+tigris-slices TIGRESS.00040.rst --savdir /path/to/analysis
+```
+
+For one of the historical rank-shifted files, provide its same-cycle parbin:
+
+```sh
+tigris-slices TIGRESS.00039.rst \
+  --particle TIGRESS.out3.00169.par0.parbin \
+  --savdir /path/to/analysis
+```
+
+Install the optional NetCDF and plotting dependencies with
+`python -m pip install -e '.[slices]'`.
+
+Generate or resume slices for every numbered restart in one run directory:
+
+```sh
+run=/nobackup/ckim14/tigress_classic/crmhd_duale-8pc-R16_tall-rst
+tigris-slices-all "$run" --prefix TIGRESS --savdir "$run" --dry-run
+tigris-slices-all "$run" --prefix TIGRESS --savdir "$run"
+```
+
+The batch command matches malformed restarts to parbin sidecars using cycle,
+time, and mesh metadata. It ignores noncanonical names such as
+`TIGRESS.00039.repaired.rst`, runs sequentially, skips both caches when they
+are newer than the restart, and continues past individual failures. Use
+`--start`, `--stop`, `--fail-fast`, or `--plot-validation` when needed.
+
+Render the eight-panel `plot_slices_cr` summary directly from the cached
+NetCDF slices, without importing pyathena or TIGRESS-CR:
+
+```sh
+tigris-plot-slices-all "$run" --prefix TIGRESS --savdir "$run"
+```
+
+Figures are written to `$run/cr_slices/<run-name>_NNNN.png`. The command skips
+fresh figures, continues past missing cache pairs, and accepts `--start`,
+`--stop`, `--figdir`, and `--overwrite`.
+
+A ready-to-submit NAS PBS job is provided at
+[`pbs/generate_all_restart_slices.pbs`](pbs/generate_all_restart_slices.pbs):
+
+```sh
+qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_slices.pbs
+```
+
+The PBS job runs both cache generation and standalone figure generation. Set
+`FIG_DIR` to change the figure directory or `PLOT_OVERWRITE=1` to redraw fresh
+figures.
 
 ## Development
 

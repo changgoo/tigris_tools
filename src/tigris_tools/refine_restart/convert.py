@@ -45,7 +45,12 @@ def refine_restart(
         out_block_size = block_size or schema.block_size
         chunks_per_parent = _chunks_per_parent(schema.block_size, out_block_size, factor)
         out_header = _refined_header(index.header, out_block_size, factor)
-        out_params = _patched_params(index.params, out_header, out_block_size)
+        out_params = _patched_params(
+            index.params,
+            out_header,
+            out_block_size,
+            schema.prng_record_bytes,
+        )
         out_blocks_per_parent = chunks_per_parent[0] * chunks_per_parent[1] * chunks_per_parent[2]
         out_nbtotal = len(index.blocks) * out_blocks_per_parent
         output_path = Path(output_path)
@@ -85,20 +90,27 @@ def infer_schema(reader: RestartReader) -> RestartSchema:
     index = reader.index
     params = index.params
     block_size = (
-        params.get_int("meshblock", "nx1", index.header.mesh_size.nx1) or index.header.mesh_size.nx1,
-        params.get_int("meshblock", "nx2", index.header.mesh_size.nx2) or index.header.mesh_size.nx2,
-        params.get_int("meshblock", "nx3", index.header.mesh_size.nx3) or index.header.mesh_size.nx3,
+        params.get_int("meshblock", "nx1", index.header.mesh_size.nx1)
+        or index.header.mesh_size.nx1,
+        params.get_int("meshblock", "nx2", index.header.mesh_size.nx2)
+        or index.header.mesh_size.nx2,
+        params.get_int("meshblock", "nx3", index.header.mesh_size.nx3)
+        or index.header.mesh_size.nx3,
     )
     configure = params.values.get("configure", {})
     restart = params.values.get("restart", {})
     nscalars = int(restart.get("nscalars", configure.get("Number_of_scalars", 0)))
     ncrg = int(restart.get("ncrg", configure.get("Cosmic_Ray_energy_groups", 1)))
-    magnetic_fields = restart.get("magnetic_fields_enabled", configure.get("Magnetic_fields", "OFF")).lower() in {
+    magnetic_fields = restart.get(
+        "magnetic_fields_enabled", configure.get("Magnetic_fields", "OFF")
+    ).lower() in {
         "true",
         "on",
         "1",
     }
-    cr_enabled = restart.get("cr_enabled", configure.get("Cosmic_Ray_Transport", "OFF")).lower() not in {
+    cr_enabled = restart.get(
+        "cr_enabled", configure.get("Cosmic_Ray_Transport", "OFF")
+    ).lower() not in {
         "false",
         "off",
         "none",
@@ -111,7 +123,9 @@ def infer_schema(reader: RestartReader) -> RestartSchema:
     sample = reader.read_block_bytes(index.blocks[0])
     particle_offset = fixed_before_particles
     npar = struct.unpack_from("<i", sample, particle_offset)[0] if particle_nreal else 0
-    particle_bytes = 0 if not particle_nreal else 8 + npar * (particle_nint * 4 + particle_nreal * 8)
+    particle_bytes = (
+        0 if not particle_nreal else 8 + npar * (particle_nint * 4 + particle_nreal * 8)
+    )
     tail = len(sample) - fixed_before_particles - particle_bytes - fixed_after_particles
     if tail < 0:
         raise ValueError("payload schema inference failed: negative user MeshBlock tail")
@@ -157,7 +171,9 @@ def _write_refined_payloads(
             out.write(child_bytes)
             records.append((loc, len(child_bytes)))
         if verbose and (parent_index + 1) % 16 == 0:
-            print(f"refine_restart.convert: refined parents={parent_index + 1}/{len(reader.index.blocks)}")
+            print(
+                f"refine_restart.convert: refined parents={parent_index + 1}/{len(reader.index.blocks)}"
+            )
     return records
 
 
@@ -170,17 +186,24 @@ def _parse_payload(data: bytes, schema: RestartSchema) -> dict[str, object]:
     bx1 = bx2 = bx3 = None
     if schema.magnetic_fields:
         s1, s2, s3 = layout.face_shapes(bs)
-        bx1 = _take_real(data, offset, s1); offset += bx1.nbytes
-        bx2 = _take_real(data, offset, s2); offset += bx2.nbytes
-        bx3 = _take_real(data, offset, s3); offset += bx3.nbytes
+        bx1 = _take_real(data, offset, s1)
+        offset += bx1.nbytes
+        bx2 = _take_real(data, offset, s2)
+        offset += bx2.nbytes
+        bx3 = _take_real(data, offset, s3)
+        offset += bx3.nbytes
     particles = None
     if schema.particle_nreal:
         npar, idmax = struct.unpack_from("<ii", data, offset)
         offset += 8
-        ints = np.frombuffer(data, dtype=layout.INT_DTYPE, count=schema.particle_nint * npar, offset=offset).copy()
+        ints = np.frombuffer(
+            data, dtype=layout.INT_DTYPE, count=schema.particle_nint * npar, offset=offset
+        ).copy()
         ints = ints.reshape(schema.particle_nint, npar)
         offset += ints.nbytes
-        reals = np.frombuffer(data, dtype=layout.REAL_DTYPE, count=schema.particle_nreal * npar, offset=offset).copy()
+        reals = np.frombuffer(
+            data, dtype=layout.REAL_DTYPE, count=schema.particle_nreal * npar, offset=offset
+        ).copy()
         reals = reals.reshape(schema.particle_nreal, npar)
         offset += reals.nbytes
         particles = (npar, idmax, ints, reals)
@@ -193,7 +216,16 @@ def _parse_payload(data: bytes, schema: RestartSchema) -> dict[str, object]:
         scalars = _take_real(data, offset, (schema.nscalars, *layout.ghost_cell_shape(bs)))
         offset += scalars.nbytes
     tail = data[offset : offset + schema.user_meshblock_tail_bytes]
-    return {"hydro": hydro, "bx1": bx1, "bx2": bx2, "bx3": bx3, "particles": particles, "cr": cr, "scalars": scalars, "tail": tail}
+    return {
+        "hydro": hydro,
+        "bx1": bx1,
+        "bx2": bx2,
+        "bx3": bx3,
+        "particles": particles,
+        "cr": cr,
+        "scalars": scalars,
+        "tail": tail,
+    }
 
 
 def _split_refined_payload(
@@ -209,7 +241,9 @@ def _split_refined_payload(
     refined = {
         "hydro": refine_cell_centered(payload["hydro"], factor),
         "cr": refine_cell_centered(payload["cr"], factor) if payload["cr"] is not None else None,
-        "scalars": refine_cell_centered(payload["scalars"], factor) if payload["scalars"] is not None else None,
+        "scalars": refine_cell_centered(payload["scalars"], factor)
+        if payload["scalars"] is not None
+        else None,
         "bx1": refine_face_x1(payload["bx1"], factor) if payload["bx1"] is not None else None,
         "bx2": refine_face_x2(payload["bx2"], factor) if payload["bx2"] is not None else None,
         "bx3": refine_face_x3(payload["bx3"], factor) if payload["bx3"] is not None else None,
@@ -259,11 +293,13 @@ def _pack_child(
         _child_cell(refined["hydro"], out_block_size, child).tobytes(order="C"),
     ]
     if schema.magnetic_fields:
-        chunks.extend([
-            _child_face(refined["bx1"], out_block_size, child, 2).tobytes(order="C"),
-            _child_face(refined["bx2"], out_block_size, child, 1).tobytes(order="C"),
-            _child_face(refined["bx3"], out_block_size, child, 0).tobytes(order="C"),
-        ])
+        chunks.extend(
+            [
+                _child_face(refined["bx1"], out_block_size, child, 2).tobytes(order="C"),
+                _child_face(refined["bx2"], out_block_size, child, 1).tobytes(order="C"),
+                _child_face(refined["bx3"], out_block_size, child, 0).tobytes(order="C"),
+            ]
+        )
     if schema.particle_nreal:
         chunks.append(_pack_particles(particles, schema))
     if schema.cr_enabled:
@@ -279,7 +315,12 @@ def _child_cell(array, block_size: tuple[int, int, int], child: tuple[int, int, 
     sx = layout.NGHOST * 2 - layout.NGHOST + cx * block_size[0]
     sy = layout.NGHOST * 2 - layout.NGHOST + cy * block_size[1]
     sz = layout.NGHOST * 2 - layout.NGHOST + cz * block_size[2]
-    return array[..., sz : sz + block_size[2] + 2 * layout.NGHOST, sy : sy + block_size[1] + 2 * layout.NGHOST, sx : sx + block_size[0] + 2 * layout.NGHOST]
+    return array[
+        ...,
+        sz : sz + block_size[2] + 2 * layout.NGHOST,
+        sy : sy + block_size[1] + 2 * layout.NGHOST,
+        sx : sx + block_size[0] + 2 * layout.NGHOST,
+    ]
 
 
 def _child_face(
@@ -292,7 +333,11 @@ def _child_face(
     sx = layout.NGHOST * 2 - layout.NGHOST + cx * block_size[0]
     sy = layout.NGHOST * 2 - layout.NGHOST + cy * block_size[1]
     sz = layout.NGHOST * 2 - layout.NGHOST + cz * block_size[2]
-    lengths = [block_size[2] + 2 * layout.NGHOST, block_size[1] + 2 * layout.NGHOST, block_size[0] + 2 * layout.NGHOST]
+    lengths = [
+        block_size[2] + 2 * layout.NGHOST,
+        block_size[1] + 2 * layout.NGHOST,
+        block_size[0] + 2 * layout.NGHOST,
+    ]
     lengths[distinguished_axis] += 1
     return array[sz : sz + lengths[0], sy : sy + lengths[1], sx : sx + lengths[2]]
 
@@ -312,13 +357,17 @@ def _child_particles(
     return int(mask.sum()), idmax, ints[:, mask], reals[:, mask]
 
 
-def _parent_bounds(parent_loc: layout.LogicalLocation, header: layout.MeshHeader, block_size: tuple[int, int, int]):
+def _parent_bounds(
+    parent_loc: layout.LogicalLocation, header: layout.MeshHeader, block_size: tuple[int, int, int]
+):
     ms = header.mesh_size
     nrb = (ms.nx1 // block_size[0], ms.nx2 // block_size[1], ms.nx3 // block_size[2])
     lengths = (ms.x1len / nrb[0], ms.x2len / nrb[1], ms.x3len / nrb[2])
     mins = (ms.x1min, ms.x2min, ms.x3min)
     locs = (parent_loc.lx1, parent_loc.lx2, parent_loc.lx3)
-    return tuple((mins[i] + locs[i] * lengths[i], mins[i] + (locs[i] + 1) * lengths[i]) for i in range(3))
+    return tuple(
+        (mins[i] + locs[i] * lengths[i], mins[i] + (locs[i] + 1) * lengths[i]) for i in range(3)
+    )
 
 
 def _chunk_bounds(parent_bounds, chunks_per_parent, child):
@@ -333,12 +382,22 @@ def _chunk_bounds(parent_bounds, chunks_per_parent, child):
 
 def _pack_particles(particles, schema: RestartSchema) -> bytes:
     npar, idmax, ints, reals = particles
-    return b"".join([struct.pack("<ii", npar, idmax), ints.astype(layout.INT_DTYPE, copy=False).tobytes(order="C"), reals.astype(layout.REAL_DTYPE, copy=False).tobytes(order="C")])
+    return b"".join(
+        [
+            struct.pack("<ii", npar, idmax),
+            ints.astype(layout.INT_DTYPE, copy=False).tobytes(order="C"),
+            reals.astype(layout.REAL_DTYPE, copy=False).tobytes(order="C"),
+        ]
+    )
 
 
 def _take_real(data: bytes, offset: int, shape: tuple[int, ...]) -> np.ndarray:
     count = int(np.prod(shape, dtype=np.int64))
-    return np.frombuffer(data, dtype=layout.REAL_DTYPE, count=count, offset=offset).copy().reshape(shape)
+    return (
+        np.frombuffer(data, dtype=layout.REAL_DTYPE, count=count, offset=offset)
+        .copy()
+        .reshape(shape)
+    )
 
 
 def _fixed_payload_sizes(block_size, nscalars, ncrg, magnetic_fields, cr_enabled):
@@ -354,7 +413,11 @@ def _fixed_payload_sizes(block_size, nscalars, ncrg, magnetic_fields, cr_enabled
 
 
 def _particle_shape(params: ParameterBlock) -> tuple[int, int]:
-    particle_blocks = [v for k, v in sorted(params.values.items()) if k.startswith("particle") and v.get("type", "none") != "none"]
+    particle_blocks = [
+        v
+        for k, v in sorted(params.values.items())
+        if k.startswith("particle") and v.get("type", "none") != "none"
+    ]
     if not particle_blocks:
         return 0, 0
     p = particle_blocks[0]
@@ -372,15 +435,22 @@ def _particle_shape(params: ParameterBlock) -> tuple[int, int]:
     return nint, nreal
 
 
-def _patched_params(params: ParameterBlock, header: layout.MeshHeader, block_size: tuple[int, int, int]) -> str:
-    return params.patched({
+def _patched_params(
+    params: ParameterBlock,
+    header: layout.MeshHeader,
+    block_size: tuple[int, int, int],
+    prng_record_bytes: int = 0,
+) -> str:
+    updates = {
         ("mesh", "nx1"): header.mesh_size.nx1,
         ("mesh", "nx2"): header.mesh_size.nx2,
         ("mesh", "nx3"): header.mesh_size.nx3,
         ("meshblock", "nx1"): block_size[0],
         ("meshblock", "nx2"): block_size[1],
         ("meshblock", "nx3"): block_size[2],
-    })
+    }
+    updates.update(_prng_parameter_updates(prng_record_bytes))
+    return params.patched(updates)
 
 
 def _refined_header(
@@ -389,10 +459,28 @@ def _refined_header(
     factor: int,
 ) -> layout.MeshHeader:
     ms = header.mesh_size
-    mesh_size = layout.RegionSize(ms.x1min, ms.x2min, ms.x3min, ms.x1max, ms.x2max, ms.x3max, ms.x1len, ms.x2len, ms.x3len, ms.x1rat, ms.x2rat, ms.x3rat, ms.nx1 * factor, ms.nx2 * factor, ms.nx3 * factor)
+    mesh_size = layout.RegionSize(
+        ms.x1min,
+        ms.x2min,
+        ms.x3min,
+        ms.x1max,
+        ms.x2max,
+        ms.x3max,
+        ms.x1len,
+        ms.x2len,
+        ms.x3len,
+        ms.x1rat,
+        ms.x2rat,
+        ms.x3rat,
+        ms.nx1 * factor,
+        ms.nx2 * factor,
+        ms.nx3 * factor,
+    )
     for mesh_n, block_n in zip((mesh_size.nx1, mesh_size.nx2, mesh_size.nx3), out_block_size):
         if mesh_n % block_n != 0:
-            raise ValueError(f"output mesh size {mesh_n} is not divisible by output block size {block_n}")
+            raise ValueError(
+                f"output mesh size {mesh_n} is not divisible by output block size {block_n}"
+            )
     nrb = (
         mesh_size.nx1 // out_block_size[0],
         mesh_size.nx2 // out_block_size[1],
@@ -430,7 +518,9 @@ def _root_level_for_grid(nrb: tuple[int, int, int]) -> int:
 
 def _infer_prng_record_bytes(index) -> int:
     trailing = index.file_size - index.payload_end
-    return trailing // len(index.blocks) if trailing > 0 and trailing % len(index.blocks) == 0 else 0
+    return (
+        trailing // len(index.blocks) if trailing > 0 and trailing % len(index.blocks) == 0 else 0
+    )
 
 
 def _write_prng(out: BinaryIO, schema: RestartSchema, out_nbtotal: int) -> None:
@@ -439,5 +529,28 @@ def _write_prng(out: BinaryIO, schema: RestartSchema, out_nbtotal: int) -> None:
     nprng = schema.prng_record_bytes // layout.PRNG_RECORD_STRUCT.size
     for rank in range(out_nbtotal):
         for p in range(nprng):
-            seed = (0x9E3779B97F4A7C15 * (rank + 1) + p) & 0xFFFFFFFFFFFFFFFF
+            seed = _prng_seed(rank, p)
             out.write(layout.PRNG_RECORD_STRUCT.pack(seed, 0))
+
+
+def _prng_parameter_updates(prng_record_bytes: int) -> dict[tuple[str, str], object]:
+    if prng_record_bytes <= 0:
+        return {}
+    if prng_record_bytes % layout.PRNG_RECORD_STRUCT.size != 0:
+        raise ValueError(
+            f"PRNG record size {prng_record_bytes} is not divisible by "
+            f"{layout.PRNG_RECORD_STRUCT.size}"
+        )
+    nprng = prng_record_bytes // layout.PRNG_RECORD_STRUCT.size
+    updates: dict[tuple[str, str], object] = {("random", "nrandom"): nprng}
+    for index in range(nprng):
+        # Keep the textual rank-0 state consistent with the first binary PRNG
+        # record.  The 20-digit seed also fixes ParameterDump's column width on
+        # every MPI rank, even after the binary state is loaded per rank.
+        updates[(f"random{index}", "seed")] = _prng_seed(0, index)
+        updates[(f"random{index}", "count")] = 0
+    return updates
+
+
+def _prng_seed(rank: int, index: int) -> int:
+    return (0x9E3779B97F4A7C15 * (rank + 1) + index) & 0xFFFFFFFFFFFFFFFF

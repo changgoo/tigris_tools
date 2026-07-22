@@ -9,3 +9,6 @@ dist/
 .ipynb_checkpoints/
 .DS_Store
 /OUT.rst
+/validation/
+/pbs/*.o[0-9]*
+/pbs/*.e[0-9]*

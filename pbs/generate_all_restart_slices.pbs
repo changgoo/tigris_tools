@@ -1,0 +1,103 @@
+#!/bin/bash
+#PBS -N rst-slices
+#PBS -q normal
+#PBS -l select=1:ncpus=1:mpiprocs=1:model=tur_ath
+#PBS -l walltime=004:00:00
+#PBS -j oe
+#PBS -m abe
+#PBS -M changgookim@gmail.com
+
+# Generate pyathena-compatible y=0 and z=0 slice caches and standalone
+# plot_slices_cr-style PNG summaries for every numbered restart.  Both stages
+# are resumable: outputs newer than their inputs are skipped.
+#
+# Submit the defaults with:
+#   qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_slices.pbs
+#
+# Override paths or restrict the inclusive output range with, for example:
+#   qsub -v START_NUM=25,STOP_NUM=30 \
+#     /home1/ckim14/tigris_tools/pbs/generate_all_restart_slices.pbs
+
+set -euo pipefail
+
+RUN_DIR="${RUN_DIR:-/nobackup/ckim14/tigress_classic/crmhd_duale-8pc-R16_tall-rst}"
+SAVE_DIR="${SAVE_DIR:-$RUN_DIR}"
+RESTART_PREFIX="${RESTART_PREFIX:-TIGRESS}"
+SLICE_TOOL=/home1/ckim14/myenv/bin/tigris-slices-all
+PLOT_TOOL=/home1/ckim14/tigris_tools/scripts/tigris-plot-slices-all
+FIG_DIR="${FIG_DIR:-$SAVE_DIR/cr_slices}"
+
+module purge
+module load PrgEnv-cray cray-pals cray-libpals craype-x86-turin perftools-base \
+  cray-hdf5-parallel cray-fftw
+module switch PrgEnv-cray PrgEnv-gnu
+
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export MPLBACKEND=Agg
+export MPLCONFIGDIR="${TMPDIR:-/tmp}/tigris-matplotlib-${PBS_JOBID:-$$}"
+
+if [[ ! -d "$RUN_DIR" ]]; then
+  echo "Run directory not found: $RUN_DIR" >&2
+  exit 2
+fi
+if [[ ! -x "$SLICE_TOOL" ]]; then
+  echo "Slice command not found or not executable: $SLICE_TOOL" >&2
+  exit 2
+fi
+if [[ ! -x "$PLOT_TOOL" ]]; then
+  echo "Plot command not found or not executable: $PLOT_TOOL" >&2
+  exit 2
+fi
+
+mkdir -p "$SAVE_DIR"
+mkdir -p "$FIG_DIR" "$MPLCONFIGDIR"
+cd "$RUN_DIR"
+
+slice_args=("$RUN_DIR" --prefix "$RESTART_PREFIX" --savdir "$SAVE_DIR")
+if [[ -n "${START_NUM:-}" ]]; then
+  slice_args+=(--start "$START_NUM")
+fi
+if [[ -n "${STOP_NUM:-}" ]]; then
+  slice_args+=(--stop "$STOP_NUM")
+fi
+
+echo "PBS job: ${PBS_JOBID:-interactive}"
+echo "Host: $(hostname)"
+echo "Run directory: $RUN_DIR"
+echo "Cache directory: $SAVE_DIR"
+echo "Figure directory: $FIG_DIR"
+echo "Start time: $(date -Is)"
+df -h "$SAVE_DIR"
+
+echo "Checking restart and particle-sidecar matches"
+"$SLICE_TOOL" "${slice_args[@]}" --dry-run
+
+echo "Generating missing or stale slice pairs"
+slice_status=0
+"$SLICE_TOOL" "${slice_args[@]}" -v || slice_status=$?
+
+plot_args=("$RUN_DIR" --prefix "$RESTART_PREFIX" --savdir "$SAVE_DIR" --figdir "$FIG_DIR")
+if [[ -n "${START_NUM:-}" ]]; then
+  plot_args+=(--start "$START_NUM")
+fi
+if [[ -n "${STOP_NUM:-}" ]]; then
+  plot_args+=(--stop "$STOP_NUM")
+fi
+if [[ "${PLOT_OVERWRITE:-0}" == "1" ]]; then
+  plot_args+=(--overwrite)
+fi
+
+echo "Rendering missing or stale slice summary figures"
+plot_status=0
+"$PLOT_TOOL" "${plot_args[@]}" || plot_status=$?
+
+echo "Finish time: $(date -Is)"
+df -h "$SAVE_DIR"
+
+if (( slice_status != 0 || plot_status != 0 )); then
+  echo "Slice status: $slice_status; plot status: $plot_status" >&2
+  exit 1
+fi

@@ -21,6 +21,10 @@ class RestartIndex:
     file_size: int
 
 
+class RestartFormatError(ValueError):
+    """The restart byte layout is inconsistent with the TIGRESS++ format."""
+
+
 class RestartReader:
     def __init__(self, path: str | Path, *, verbose: bool = False, log: TextIO | None = None):
         self.path = Path(path)
@@ -83,6 +87,7 @@ class RestartReader:
         self._log(f"user mesh data bytes={user_mesh_size}{suffix}")
         self._log(_restart_summary(params))
 
+        id_list_start = stream.tell()
         id_records = _read_exact(
             stream,
             header.nbtotal * layout.ID_LIST_RECORD_STRUCT.size,
@@ -90,15 +95,34 @@ class RestartReader:
         )
         payload_start = stream.tell()
         offset = payload_start
+        file_size = self.path.stat().st_size
         blocks: list[layout.InputBlockDesc] = []
+        seen: set[tuple[int, int, int, int]] = set()
+        block_grid = _root_block_grid(params, header)
         for idx in range(header.nbtotal):
             loc, cost, byte_size = layout.unpack_id_record(
                 id_records,
                 idx * layout.ID_LIST_RECORD_STRUCT.size,
             )
+            reason = _invalid_id_record_reason(
+                loc,
+                cost,
+                byte_size,
+                header=header,
+                block_grid=block_grid,
+                seen=seen,
+                remaining_file_bytes=file_size - offset,
+            )
+            if reason is not None:
+                record_offset = id_list_start + idx * layout.ID_LIST_RECORD_STRUCT.size
+                raise RestartFormatError(
+                    f"invalid meshblock ID record {idx} at byte {record_offset}: {reason}. "
+                    "The ID table must contain fixed 48-byte records. A displacement here can "
+                    "be caused by rank-dependent header offsets in the restart writer."
+                )
+            seen.add((loc.level, loc.lx1, loc.lx2, loc.lx3))
             blocks.append(layout.InputBlockDesc(loc, cost, byte_size, offset))
             offset += byte_size
-        file_size = self.path.stat().st_size
         if offset > file_size:
             raise EOFError(
                 f"block payloads extend past EOF: expected end {offset}, file size {file_size}"
@@ -160,7 +184,9 @@ class RestartReader:
             header.mesh_size.nx3 // block_size[2],
         )
         for rel in range(0, len(data) - list_size + 1, 4):
-            if _looks_like_id_list(data, rel, header.nbtotal, header.root_level, nrb, file_size, start):
+            if _looks_like_id_list(
+                data, rel, header.nbtotal, header.root_level, nrb, file_size, start
+            ):
                 stream.seek(start)
                 return rel
         stream.seek(start)
@@ -213,7 +239,7 @@ def _restart_summary(params: ParameterBlock) -> str:
     restart = params.values.get("restart", {})
     meshblock = params.values.get("meshblock", {})
     keys = {
-        "meshblock": f"({meshblock.get('nx1','?')},{meshblock.get('nx2','?')},{meshblock.get('nx3','?')})",
+        "meshblock": f"({meshblock.get('nx1', '?')},{meshblock.get('nx2', '?')},{meshblock.get('nx3', '?')})",
         "mhd": restart.get("magnetic_fields_enabled", "?"),
         "cr": restart.get("cr_enabled", "?"),
         "ncrg": restart.get("ncrg", "1"),
@@ -253,3 +279,49 @@ def _looks_like_id_list(
         total_payload += byte_size
     payload_start = absolute_start + rel + nbtotal * record_size
     return payload_start + total_payload <= file_size
+
+
+def _root_block_grid(
+    params: ParameterBlock,
+    header: layout.MeshHeader,
+) -> tuple[int, int, int]:
+    block_size = (
+        params.get_int("meshblock", "nx1", header.mesh_size.nx1) or header.mesh_size.nx1,
+        params.get_int("meshblock", "nx2", header.mesh_size.nx2) or header.mesh_size.nx2,
+        params.get_int("meshblock", "nx3", header.mesh_size.nx3) or header.mesh_size.nx3,
+    )
+    mesh_size = (header.mesh_size.nx1, header.mesh_size.nx2, header.mesh_size.nx3)
+    if any(mesh % block != 0 for mesh, block in zip(mesh_size, block_size)):
+        raise RestartFormatError(
+            f"mesh size {mesh_size} is not divisible by meshblock size {block_size}"
+        )
+    return tuple(mesh // block for mesh, block in zip(mesh_size, block_size))  # type: ignore[return-value]
+
+
+def _invalid_id_record_reason(
+    loc: layout.LogicalLocation,
+    cost: float,
+    byte_size: int,
+    *,
+    header: layout.MeshHeader,
+    block_grid: tuple[int, int, int],
+    seen: set[tuple[int, int, int, int]],
+    remaining_file_bytes: int,
+) -> str | None:
+    if loc.level < header.root_level:
+        return f"level {loc.level} is below root level {header.root_level}"
+    level_factor = 1 << (loc.level - header.root_level)
+    limits = tuple(n * level_factor for n in block_grid)
+    coords = (loc.lx1, loc.lx2, loc.lx3)
+    if any(coord < 0 or coord >= limit for coord, limit in zip(coords, limits)):
+        return f"location {coords} is outside level-{loc.level} block grid {limits}"
+    key = (loc.level, *coords)
+    if key in seen:
+        return f"duplicate location level={loc.level} index={coords}"
+    if not math.isfinite(cost) or cost <= 0.0:
+        return f"cost must be finite and positive; got {cost!r}"
+    if byte_size <= 0:
+        return f"payload size must be positive; got {byte_size}"
+    if byte_size > remaining_file_bytes:
+        return f"payload size {byte_size} exceeds remaining file bytes {remaining_file_bytes}"
+    return None

@@ -16,9 +16,19 @@ dev = [
   "pytest",
   "ruff",
 ]
+slices = [
+  "matplotlib>=3.6",
+  "netCDF4>=1.6",
+  "xarray>=2023.1",
+]
 
 [project.scripts]
 refine-restart = "tigris_tools.refine_restart.cli:main"
+repair-restart = "tigris_tools.restart_slices.repair_cli:main"
+repair-restarts-all = "tigris_tools.restart_slices.repair_batch:main"
+tigris-plot-slices-all = "tigris_tools.restart_slices.summary_plot:main"
+tigris-slices = "tigris_tools.restart_slices.cli:main"
+tigris-slices-all = "tigris_tools.restart_slices.batch:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

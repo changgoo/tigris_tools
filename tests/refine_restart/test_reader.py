@@ -1,5 +1,7 @@
 from io import StringIO
 
+import pytest
+
 from tigris_tools.refine_restart.layout import (
     LogicalLocation,
     MeshHeader,
@@ -7,7 +9,7 @@ from tigris_tools.refine_restart.layout import (
     pack_id_record,
     pack_mesh_header,
 )
-from tigris_tools.refine_restart.reader import read_restart_index
+from tigris_tools.refine_restart.reader import RestartFormatError, read_restart_index
 
 
 def test_read_restart_index(tmp_path):
@@ -30,7 +32,7 @@ def test_verbose_restart_index_logs_summary(tmp_path):
     read_restart_index(path, verbose=True, log=log)
 
     output = log.getvalue()
-    assert "mesh nbtotal=2 root_level=1 nx=(4,4,4)" in output
+    assert "mesh nbtotal=2 root_level=1 nx=(8,4,4)" in output
     assert "restart schema" in output
     assert "blocks count=2 payload_bytes=24 min=11 max=13" in output
 
@@ -51,11 +53,24 @@ def test_read_restart_index_infers_legacy_user_mesh_data(tmp_path):
     assert index.blocks[1].file_offset == index.payload_start + len(payload0)
 
 
+def test_read_restart_index_reports_displaced_id_record(tmp_path):
+    path, _header, _user_mesh_data, _payload0 = _write_tiny_restart(tmp_path)
+    data = bytearray(path.read_bytes())
+    first_payload_marker = data.index(b"a" * 11)
+    id_list_start = first_payload_marker - 2 * 48
+    second_record = id_list_start + 48
+    data[second_record : second_record + 8] = (999).to_bytes(8, "little", signed=True)
+    path.write_bytes(data)
+
+    with pytest.raises(RestartFormatError, match="fixed 48-byte records"):
+        read_restart_index(path)
+
+
 def _write_tiny_restart(
     tmp_path,
     *,
     include_restart_block=True,
-    mesh_nx=(4, 4, 4),
+    mesh_nx=(8, 4, 4),
     user_mesh_data=b"iiiirrrrrrrr",
 ):
     params = f"""<mesh>
