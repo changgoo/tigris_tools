@@ -2,6 +2,7 @@ import numpy as np
 
 from tigris_tools.restart_slices.summary_plot import (
     PlotUnits,
+    _coordinate_bounds,
     derive_summary_fields,
     figure_path,
 )
@@ -48,3 +49,7 @@ def test_derive_summary_fields_matches_tigress_cr_conventions():
 
 def test_figure_path_uses_plot_slices_cr_name(tmp_path):
     assert figure_path(tmp_path, "model", 21) == tmp_path / "model_0021.png"
+
+
+def test_coordinate_bounds_restore_full_cell_edge_domain():
+    assert _coordinate_bounds(np.array([-3.0, -1.0, 1.0, 3.0])) == (-4.0, 4.0)

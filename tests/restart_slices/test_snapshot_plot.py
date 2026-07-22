@@ -3,6 +3,7 @@ import numpy as np
 from tigris_tools.restart_slices.projection import ProjectionUnits
 from tigris_tools.restart_slices.snapshot_plot import (
     SnapshotUnits,
+    _grid_rectangles,
     derive_snapshot_fields,
     snapshot_figure_path,
 )
@@ -39,3 +40,9 @@ def test_derive_snapshot_fields_uses_tigress_cr_units():
 
 def test_snapshot_figure_path_matches_plot_snapshot(tmp_path):
     assert snapshot_figure_path(tmp_path, 30) == tmp_path / "snapshot_00030.png"
+
+
+def test_snapshot_grids_leave_original_label_gutter():
+    xy, xz = _grid_rectangles(12.0, 18.5, 6, 7, 1.5)
+
+    assert np.isclose(xz[0] - (xy[0] + xy[2]), 0.05)

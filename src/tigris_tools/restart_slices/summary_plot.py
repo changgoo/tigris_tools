@@ -177,6 +177,8 @@ def write_summary_plot(
         ):
             xcoord = np.asarray(dataset["x"]) * scale
             vcoord = np.asarray(dataset[vertical]) * scale
+            xlim = _coordinate_bounds(xcoord)
+            ylim = _coordinate_bounds(vcoord)
             for column, field in enumerate(fields):
                 panel = axes[row, column]
                 style = FIELD_STYLES[field]
@@ -215,6 +217,10 @@ def write_summary_plot(
                         silver=field == "pok_mag",
                         density_factor=0.5 if field == "VAi_mag" else 1.0,
                     )
+                # streamplot autoscales beyond the supplied cell centers. Restore
+                # the physical cell-edge domain so every equal-aspect panel has
+                # exactly the same axes box, as in TIGRESS-CR plot_slice_*.
+                panel.set(xlim=xlim, ylim=ylim)
         time_code = float(xy.attrs["time"])
         axes[0, 0].annotate(
             f"t={time_code * units.time_myr:.2f} Myr",
@@ -251,6 +257,15 @@ def _coordinate_span(coordinate) -> float:
         return 1.0
     spacing = float(np.median(np.diff(values)))
     return float(values[-1] - values[0] + spacing)
+
+
+def _coordinate_bounds(coordinate) -> tuple[float, float]:
+    values = np.asarray(coordinate)
+    if values.size < 2:
+        value = float(values[0]) if values.size else 0.0
+        return value - 0.5, value + 0.5
+    half_spacing = 0.5 * float(np.median(np.diff(values)))
+    return float(values[0] - half_spacing), float(values[-1] + half_spacing)
 
 
 def _resolve_cmap(name: str):

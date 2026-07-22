@@ -122,6 +122,7 @@ def write_snapshot_plot(
         import matplotlib.pyplot as plt
         import xarray as xr
         from matplotlib.colors import LogNorm, Normalize
+        from mpl_toolkits.axes_grid1 import ImageGrid
         from mpl_toolkits.axes_grid1.inset_locator import inset_axes
     except ImportError as exc:
         raise RuntimeError(
@@ -144,19 +145,30 @@ def write_snapshot_plot(
         ysize = lz / lx * xwidth
         xsize = ysize / len(FIELDS_XY) * 4.0 + len(FIELDS_XZ) * xwidth
         figure = plt.figure(figsize=(xsize, ysize))
-        grid = figure.add_gridspec(
-            3,
-            2 + len(FIELDS_XZ),
-            width_ratios=[ysize / 3.0, ysize / 3.0, *([xwidth] * len(FIELDS_XZ))],
-            wspace=0.08,
-            hspace=0.08,
-            left=0.02,
-            right=0.99,
-            bottom=0.05,
-            top=0.97,
+        xy_rectangle, xz_rectangle = _grid_rectangles(
+            ysize, xsize, len(FIELDS_XY), len(FIELDS_XZ), xwidth
         )
-        axes_xy = [figure.add_subplot(grid[i % 3, i // 3]) for i in range(len(FIELDS_XY))]
-        axes_xz = [figure.add_subplot(grid[:, 2 + i]) for i in range(len(FIELDS_XZ))]
+        axes_xy = list(
+            ImageGrid(
+                figure,
+                xy_rectangle,
+                (len(FIELDS_XY) // 2, 2),
+                axes_pad=0.1,
+                aspect=True,
+                share_all=True,
+                direction="column",
+            )
+        )
+        axes_xz = list(
+            ImageGrid(
+                figure,
+                xz_rectangle,
+                (1, len(FIELDS_XZ)),
+                axes_pad=0.1,
+                aspect=True,
+                share_all=True,
+            )
+        )
         for index, (axis, field) in enumerate(zip(axes_xy, FIELDS_XY)):
             data = (
                 prj_xy[field].sel(phase="whole") if field in prj_xy else derived_xy[field]
@@ -269,6 +281,14 @@ def _scatter_particles(axis, particles, sightline, units, norm_factor, agemax, p
 def _span(coordinate) -> float:
     values = np.asarray(coordinate)
     return float(values[-1] - values[0] + np.median(np.diff(values)))
+
+
+def _grid_rectangles(ysize, xsize, nxy, nxz, xwidth):
+    """Return the two ImageGrid rectangles used by TIGRESS-CR plot_snapshot."""
+
+    xy_width = 0.90 * (ysize * 4.0 / nxy / xsize)
+    xz_width = 0.90 * (nxz * xwidth / xsize)
+    return [0.02, 0.05, xy_width, 0.94], [xy_width + 0.07, 0.05, xz_width, 0.94]
 
 
 def _bounds(coordinate) -> tuple[float, float]:
