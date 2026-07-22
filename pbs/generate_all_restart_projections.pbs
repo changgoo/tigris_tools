@@ -1,7 +1,7 @@
 #!/bin/bash
 #PBS -N rst-prj
 #PBS -q normal
-#PBS -l select=1:ncpus=1:mpiprocs=1:model=tur_ath
+#PBS -l select=1:ncpus=8:mpiprocs=8:model=tur_ath
 #PBS -l walltime=004:00:00
 #PBS -j oe
 #PBS -m abe
@@ -24,6 +24,8 @@ SAVE_DIR="${SAVE_DIR:-$RUN_DIR}"
 RESTART_PREFIX="${RESTART_PREFIX:-TIGRESS}"
 PROJECTION_TOOL=/home1/ckim14/tigris_tools/scripts/tigris-projections-all
 SNAPSHOT_DIR="${SNAPSHOT_DIR:-$SAVE_DIR/snapshot}"
+MPI_RANKS="${MPI_RANKS:-8}"
+MPIEXEC="${MPIEXEC:-/home1/ckim14/myenv/bin/mpiexec}"
 
 module purge
 module load PrgEnv-cray cray-pals cray-libpals craype-x86-turin perftools-base \
@@ -45,6 +47,10 @@ if [[ ! -x "$PROJECTION_TOOL" ]]; then
   echo "Projection command not found or not executable: $PROJECTION_TOOL" >&2
   exit 2
 fi
+if [[ ! -x "$MPIEXEC" ]]; then
+  echo "MPI launcher not found or not executable: $MPIEXEC" >&2
+  exit 2
+fi
 
 mkdir -p "$SAVE_DIR" "$SNAPSHOT_DIR" "$MPLCONFIGDIR"
 cd "$RUN_DIR"
@@ -64,11 +70,13 @@ echo "PBS job: ${PBS_JOBID:-interactive}"
 echo "Run directory: $RUN_DIR"
 echo "Cache directory: $SAVE_DIR"
 echo "Snapshot directory: $SNAPSHOT_DIR"
+echo "MPI ranks: $MPI_RANKS"
+echo "MPI launcher: $MPIEXEC"
 echo "Start time: $(date -Is)"
 df -h "$SAVE_DIR"
 
 "$PROJECTION_TOOL" "${args[@]}" --dry-run
-"$PROJECTION_TOOL" "${args[@]}" -v
+"$MPIEXEC" -n "$MPI_RANKS" "$PROJECTION_TOOL" "${args[@]}" -v
 
 echo "Finish time: $(date -Is)"
 df -h "$SAVE_DIR"

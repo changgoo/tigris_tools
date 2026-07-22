@@ -199,10 +199,18 @@ def extract_projections(
     *,
     particle_path: str | Path | None = None,
     verbose: bool = False,
+    comm=None,
 ) -> ProjectionResult:
-    """Stream every root meshblock into y- and z-projection accumulators."""
+    """Stream root meshblocks into y/z projections, optionally across MPI ranks.
+
+    Every rank holds a local two-dimensional accumulator and reads a contiguous
+    range of the restart payload. The accumulators are summed onto rank zero;
+    only rank zero receives populated ``ProjectionResult.projections``.
+    """
 
     restart_path = Path(restart_path)
+    rank = 0 if comm is None else comm.Get_rank()
+    size = 1 if comm is None else comm.Get_size()
     # The high-level progress report is useful; one reader line per 8 MiB block is not.
     with RestartSource(restart_path, particle_path=particle_path, verbose=False) as source:
         assert source.index is not None and source.schema is not None
@@ -221,8 +229,6 @@ def extract_projections(
         projections: dict[str, dict[str, dict[str, np.ndarray]]] = {
             axis: {phase: {} for phase in PHASES} for axis in ("z", "y")
         }
-        particle_ints: list[np.ndarray] = []
-        particle_reals: list[np.ndarray] = []
         bx, by, bz = schema.block_size
         g = layout.NGHOST
         cr_reconstructor = None
@@ -232,46 +238,91 @@ def extract_projections(
             cr_reconstructor = CRReconstructor(index.params, restart_path.parent)
 
         blocks = sorted(index.blocks, key=lambda block: block.file_offset)
-        for number, block in enumerate(blocks, start=1):
-            payload = _parse_payload(source.read_block_bytes(block), schema)
-            reconstructed = _reconstruct_block(
-                payload, index, schema, cr_reconstructor, spacing
-            )
-            active = {
-                name: values[g : g + bz, g : g + by, g : g + bx]
-                for name, values in reconstructed.items()
-            }
-            per_cell = derive_projection_fields(active, units, gamma)
-            temperature = gas_temperature(active, units, mu_from_t1)
-            masks = {
-                "whole": 1.0,
-                "hot": temperature > 2.0e4,
-                "wc": temperature <= 2.0e4,
-            }
-            _accumulate_block(
-                projections, per_cell, masks, block.loc, schema.block_size, spacing, shapes
-            )
-            particles = payload["particles"]
-            if particles is not None and particles[0]:
-                particle_ints.append(particles[2].T.copy())
-                particle_reals.append(particles[3].T.copy())
-            if verbose and (number % 32 == 0 or number == len(blocks)):
-                print(f"restart_projections: blocks={number}/{len(blocks)}")
+        if size > len(blocks):
+            raise ValueError(f"MPI ranks ({size}) exceed restart meshblocks ({len(blocks)})")
+        first, stop = _block_range(len(blocks), rank, size)
+        local_blocks = blocks[first:stop]
+        local_error = None
+        try:
+            for number, block in enumerate(local_blocks, start=1):
+                payload = _parse_payload(source.read_block_bytes(block), schema)
+                reconstructed = _reconstruct_block(
+                    payload, index, schema, cr_reconstructor, spacing
+                )
+                active = {
+                    name: values[g : g + bz, g : g + by, g : g + bx]
+                    for name, values in reconstructed.items()
+                }
+                per_cell = derive_projection_fields(active, units, gamma)
+                temperature = gas_temperature(active, units, mu_from_t1)
+                masks = {
+                    "whole": 1.0,
+                    "hot": temperature > 2.0e4,
+                    "wc": temperature <= 2.0e4,
+                }
+                _accumulate_block(
+                    projections, per_cell, masks, block.loc, schema.block_size, spacing, shapes
+                )
+                if verbose and rank == 0 and (
+                    number % 128 == 0 or number == len(local_blocks)
+                ):
+                    print(
+                        f"restart_projections: rank=0 blocks={number}/{len(local_blocks)} "
+                        f"global={len(blocks)} ranks={size}",
+                        flush=True,
+                    )
+        except Exception as exc:
+            local_error = f"rank {rank}: {type(exc).__name__}: {exc}"
 
-        particle_data = ParticleData(
-            np.concatenate(particle_ints) if particle_ints else np.empty((0, schema.particle_nint)),
-            np.concatenate(particle_reals)
-            if particle_reals
-            else np.empty((0, schema.particle_nreal)),
-        )
+        if comm is not None:
+            errors = comm.allgather(local_error)
+            failures = [error for error in errors if error is not None]
+            if failures:
+                raise RuntimeError("MPI projection failure: " + "; ".join(failures))
+            projections = _reduce_projections(projections, comm)
+        elif local_error is not None:
+            raise RuntimeError(local_error)
+
         return ProjectionResult(
             projections=projections,
             coordinates=coords,
             time=index.header.time,
             cycle=index.header.ncycle,
-            particles=particle_data,
+            particles=ParticleData.empty(schema.particle_nint, schema.particle_nreal),
             recovery=source.recovery,
         )
+
+
+def _reduce_projections(projections, comm):
+    """Sum local projection arrays onto rank zero without a second packed copy."""
+
+    from mpi4py import MPI
+
+    rank = comm.Get_rank()
+    field_names = tuple(projections["z"]["whole"])
+    all_names = comm.allgather(field_names)
+    if any(names != field_names for names in all_names):
+        raise RuntimeError(f"MPI ranks reconstructed different projection fields: {all_names}")
+    reduced = (
+        {axis: {phase: {} for phase in PHASES} for axis in ("z", "y")}
+        if rank == 0
+        else {}
+    )
+    for axis in ("z", "y"):
+        for phase in PHASES:
+            for name in field_names:
+                local = np.ascontiguousarray(projections[axis][phase][name])
+                output = np.empty_like(local) if rank == 0 else None
+                comm.Reduce(local, output, op=MPI.SUM, root=0)
+                if rank == 0:
+                    reduced[axis][phase][name] = output
+    return reduced
+
+
+def _block_range(count: int, rank: int, size: int) -> tuple[int, int]:
+    if size < 1 or not 0 <= rank < size:
+        raise ValueError(f"invalid MPI rank/size: rank={rank}, size={size}")
+    return count * rank // size, count * (rank + 1) // size
 
 
 def _accumulate_block(

@@ -13,6 +13,8 @@ From a checkout:
 
 ```sh
 python -m pip install -e .
+# NetCDF, plotting, development, and MPI support:
+python -m pip install -e ".[dev,slices,mpi]"
 ```
 
 For local development without installing:
@@ -166,6 +168,14 @@ as `TIGRESS-CR/python/slc_prj.py`. Snapshot figures are written to
 particle records embedded in each restart. To redraw snapshots from existing
 slice and projection caches, use `tigris-plot-snapshots-all`.
 
+Projection extraction automatically uses MPI when launched with `mpiexec`.
+Ranks read disjoint contiguous meshblock ranges, then sum their two-dimensional
+accumulators onto rank zero. NetCDF writing and plotting remain rank-zero-only:
+
+```sh
+mpiexec -n 8 tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+```
+
 A ready-to-submit NAS PBS job is provided at
 [`pbs/generate_all_restart_slices.pbs`](pbs/generate_all_restart_slices.pbs):
 
@@ -177,8 +187,8 @@ The PBS job runs both cache generation and standalone figure generation. Set
 `FIG_DIR` to change the figure directory or `PLOT_OVERWRITE=1` to redraw fresh
 figures.
 
-After slice generation finishes, submit the independent resumable projection
-job:
+After slice generation finishes, submit the independent resumable eight-rank
+projection job:
 
 ```sh
 qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs

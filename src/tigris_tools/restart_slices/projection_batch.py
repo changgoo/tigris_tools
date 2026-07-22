@@ -35,15 +35,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    comm = _world_comm()
+    rank = 0 if comm is None else comm.Get_rank()
+    size = 1 if comm is None else comm.Get_size()
     figdir = args.figdir or args.savdir / "snapshot"
     restarts = discover_numbered_restarts(
         args.restart_dir, prefix=args.prefix, start=args.start, stop=args.stop
     )
     if not restarts:
         raise SystemExit(f"tigris-projections-all: no numbered restarts in {args.restart_dir}")
-    particle_files = discover_particle_files(args.restart_dir, verbose=args.verbose)
+    particle_files = discover_particle_files(
+        args.restart_dir, verbose=args.verbose and rank == 0
+    )
     completed = skipped = figures = 0
     failures = []
+    if rank == 0:
+        print(f"tigris-projections-all: MPI ranks={size}", flush=True)
     for position, item in enumerate(restarts, 1):
         projection_paths = {
             axis: projection_cache_path(args.savdir, axis, item.num) for axis in ("y", "z")
@@ -62,72 +69,129 @@ def main(argv: list[str] | None = None) -> int:
             and all(path.is_file() and output.stat().st_mtime > path.stat().st_mtime for path in figure_inputs)
         )
         mode = "fresh" if projections_fresh else "generate"
-        print(f"[{position}/{len(restarts)}] {item.path.name}: projections={mode}", flush=True)
+        if rank == 0:
+            print(
+                f"[{position}/{len(restarts)}] {item.path.name}: projections={mode}",
+                flush=True,
+            )
         if args.dry_run:
             continue
-        particle_path = None
-        try:
-            read_restart_index(item.path)
-        except RestartFormatError:
-            particle_path = match_particle_file(item, particle_files)
-        try:
-            result = None
-            if projections_fresh:
-                skipped += 1
-            else:
-                result = extract_projections(
-                    item.path, particle_path=particle_path, verbose=args.verbose
-                )
-                projection_paths = write_projection_caches(
-                    result, args.savdir, item.num, overwrite=True
-                )
-                completed += 1
-                print(
-                    f"  wrote {projection_paths['z']} and {projection_paths['y']}", flush=True
-                )
-            if not args.no_snapshot and not figure_fresh:
-                slices = {
-                    axis: slice_cache_path(args.savdir, axis, item.num) for axis in ("y", "z")
-                }
-                missing = [str(path) for path in slices.values() if not path.is_file()]
-                if missing:
-                    raise FileNotFoundError(f"snapshot requires slice caches: {missing}")
-                particles = (
-                    result.particles
-                    if result is not None
-                    else extract_particles(item.path, particle_path=particle_path)
-                )
-                write_snapshot_plot(
-                    slices["y"],
-                    slices["z"],
-                    projection_paths["y"],
-                    projection_paths["z"],
-                    item.path,
-                    output,
-                    particles=particles,
-                )
-                figures += 1
-                print(f"  wrote {output}", flush=True)
-        except Exception as exc:
-            failures.append({"restart": str(item.path), "error": f"{type(exc).__name__}: {exc}"})
-            print(f"  FAILED: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+        particle_path_text = None
+        preparation_error = None
+        if rank == 0:
+            try:
+                read_restart_index(item.path)
+            except RestartFormatError:
+                try:
+                    particle_path_text = str(match_particle_file(item, particle_files))
+                except Exception as exc:
+                    preparation_error = f"{type(exc).__name__}: {exc}"
+        if comm is not None:
+            particle_path_text, preparation_error = comm.bcast(
+                (particle_path_text, preparation_error), root=0
+            )
+        particle_path = Path(particle_path_text) if particle_path_text is not None else None
+        if preparation_error is not None:
+            if rank == 0:
+                failures.append({"restart": str(item.path), "error": preparation_error})
+                print(f"  FAILED: {preparation_error}", file=sys.stderr, flush=True)
             if args.fail_fast:
                 break
-    print(
-        json.dumps(
-            {
-                "found": len(restarts),
-                "projections_completed": completed,
-                "projections_skipped_fresh": skipped,
-                "figures_completed": figures,
-                "figdir": str(figdir),
-                "dry_run": args.dry_run,
-                "failures": failures,
-            },
-            indent=2,
+            continue
+
+        result = None
+        projection_error = None
+        if not projections_fresh:
+            try:
+                result = extract_projections(
+                    item.path,
+                    particle_path=particle_path,
+                    verbose=args.verbose,
+                    comm=comm,
+                )
+            except Exception as exc:
+                projection_error = f"{type(exc).__name__}: {exc}"
+        if comm is not None:
+            rank_errors = comm.allgather(projection_error)
+            projection_error = next((error for error in rank_errors if error is not None), None)
+
+        root_error = projection_error
+        if rank == 0 and root_error is None:
+            try:
+                if projections_fresh:
+                    skipped += 1
+                else:
+                    assert result is not None
+                    projection_paths = write_projection_caches(
+                        result, args.savdir, item.num, overwrite=True
+                    )
+                    completed += 1
+                    print(
+                        f"  wrote {projection_paths['z']} and {projection_paths['y']}",
+                        flush=True,
+                    )
+                if not args.no_snapshot and not figure_fresh:
+                    slices = {
+                        axis: slice_cache_path(args.savdir, axis, item.num)
+                        for axis in ("y", "z")
+                    }
+                    missing = [str(path) for path in slices.values() if not path.is_file()]
+                    if missing:
+                        raise FileNotFoundError(f"snapshot requires slice caches: {missing}")
+                    particles = extract_particles(item.path, particle_path=particle_path)
+                    write_snapshot_plot(
+                        slices["y"],
+                        slices["z"],
+                        projection_paths["y"],
+                        projection_paths["z"],
+                        item.path,
+                        output,
+                        particles=particles,
+                    )
+                    figures += 1
+                    print(f"  wrote {output}", flush=True)
+            except Exception as exc:
+                root_error = f"{type(exc).__name__}: {exc}"
+        if comm is not None:
+            root_error = comm.bcast(root_error, root=0)
+        if root_error is not None:
+            if rank == 0:
+                failures.append({"restart": str(item.path), "error": root_error})
+                print(f"  FAILED: {root_error}", file=sys.stderr, flush=True)
+            if args.fail_fast:
+                break
+        if comm is not None:
+            comm.Barrier()
+
+    status = 1 if failures else 0
+    if rank == 0:
+        print(
+            json.dumps(
+                {
+                    "found": len(restarts),
+                    "mpi_ranks": size,
+                    "projections_completed": completed,
+                    "projections_skipped_fresh": skipped,
+                    "figures_completed": figures,
+                    "figdir": str(figdir),
+                    "dry_run": args.dry_run,
+                    "failures": failures,
+                },
+                indent=2,
+            )
         )
-    )
-    return 1 if failures else 0
+    if comm is not None:
+        status = comm.bcast(status, root=0)
+    return status
+
+
+def _world_comm():
+    try:
+        from mpi4py import MPI
+    except ImportError:
+        return None
+    comm = MPI.COMM_WORLD
+    return comm if comm.Get_size() > 1 else None
 
 
 if __name__ == "__main__":

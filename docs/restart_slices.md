@@ -92,6 +92,17 @@ Unless `--no-snapshot` is passed, the same command writes
 restart rather than selecting a nearby particle output. Existing compatible
 caches and figures are skipped unless `--overwrite` is given.
 
+When invoked under MPI, numbered restarts are still processed sequentially to
+keep memory bounded. For each restart, ranks open the file read-only and read
+disjoint contiguous meshblock ranges. Each rank constructs local y/z
+accumulators; `MPI_Reduce` sums every field and phase onto rank zero. Only rank
+zero writes NetCDF files, reads the lightweight embedded-particle records, and
+plots the snapshot. A normal invocation remains a supported one-rank fallback:
+
+```sh
+mpiexec -n 8 tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+```
+
 The NAS job for this stage is:
 
 ```sh

@@ -21,6 +21,9 @@ slices = [
   "netCDF4>=1.6",
   "xarray>=2023.1",
 ]
+mpi = [
+  "mpi4py>=3.1",
+]
 
 [project.scripts]
 refine-restart = "tigris_tools.refine_restart.cli:main"

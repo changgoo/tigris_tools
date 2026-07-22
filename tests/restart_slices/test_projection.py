@@ -3,6 +3,7 @@ import numpy as np
 from tigris_tools.restart_slices.projection import (
     ProjectionUnits,
     _accumulate_block,
+    _block_range,
     derive_projection_fields,
 )
 
@@ -58,3 +59,14 @@ def test_accumulate_block_integrates_surface_fields_and_averages_fluxes():
     np.testing.assert_allclose(projections["z"]["whole"]["mflux"], values.mean(0))
     np.testing.assert_allclose(projections["y"]["whole"]["Sigma"], values.sum(1) * 2)
     np.testing.assert_allclose(projections["y"]["whole"]["mflux"], values.mean(1))
+
+
+def test_mpi_block_ranges_are_contiguous_balanced_and_complete():
+    ranges = [_block_range(4096, rank, 7) for rank in range(7)]
+
+    assert ranges[0][0] == 0
+    assert ranges[-1][1] == 4096
+    assert all(left[1] == right[0] for left, right in zip(ranges, ranges[1:]))
+    assert max(stop - start for start, stop in ranges) - min(
+        stop - start for start, stop in ranges
+    ) <= 1
