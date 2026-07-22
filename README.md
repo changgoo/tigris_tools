@@ -195,6 +195,17 @@ It writes slice figures under `$run/cr_slices/` and snapshot figures under
 `$run/snapshot/`. The older `generate_all_restart_slices.pbs` remains available
 when only serial slice products are wanted.
 
+Create both MP4 movies with the original TIGRESS-CR names and 15 fps defaults:
+
+```sh
+tigris-make-movies "$run"
+```
+
+This uses `ffmpeg` to write `$run/movies/<run-name>_cr_slices.mp4` and
+`$run/movies/<run-name>_snapshot.mp4`. Use `--kind slices` or
+`--kind snapshot` to create only one movie, and `--dry-run` to inspect the
+commands first.
+
 Write a quick slice comparison figure while converting:
 
 ```sh

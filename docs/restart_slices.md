@@ -116,6 +116,20 @@ The NAS job for this stage is:
 qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
 ```
 
+After figures are available, reproduce the two movie names used by the original
+`plot_slices.py` workflow:
+
+```sh
+tigris-make-movies "$run"
+```
+
+At the default 15 fps this writes
+`<run>/movies/<run-name>_cr_slices.mp4` from `cr_slices/*.png` and
+`<run>/movies/<run-name>_snapshot.mp4` from `snapshot/*.png`. The command uses
+H.264 with `yuv420p`, uses `ffmpeg` from `PATH` or an installed
+`imageio-ffmpeg` fallback, and accepts `--dry-run`, `--kind`, `--fps-in`, and
+`--fps-out`.
+
 ## Compatibility contract
 
 The cache contract follows `pyathena_tigris.LoadSim.Decorators.check_netcdf`.
