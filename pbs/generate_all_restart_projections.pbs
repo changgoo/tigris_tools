@@ -1,5 +1,5 @@
 #!/bin/bash
-#PBS -N rst-prj
+#PBS -N rst-products
 #PBS -q normal
 #PBS -l select=1:ncpus=8:mpiprocs=8:model=tur_ath
 #PBS -l walltime=004:00:00
@@ -7,10 +7,11 @@
 #PBS -m abe
 #PBS -M changgookim@gmail.com
 
-# Generate pyathena-compatible y/z projection caches and plot_snapshot-style
-# figures for every numbered restart. Both outputs are resumable.
+# In one MPI read per restart, generate pyathena-compatible y/z slice and
+# projection caches plus plot_slices_cr- and plot_snapshot-style figures.
+# All outputs are resumable.
 #
-# Submit after the slice-cache job finishes:
+# Submit this in place of the separate slice-cache and projection jobs:
 #   qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
 #
 # Restrict the inclusive range when needed:
@@ -22,8 +23,9 @@ set -euo pipefail
 RUN_DIR="${RUN_DIR:-/nobackup/ckim14/tigress_classic/crmhd_duale-8pc-R16_tall-rst}"
 SAVE_DIR="${SAVE_DIR:-$RUN_DIR}"
 RESTART_PREFIX="${RESTART_PREFIX:-TIGRESS}"
-PROJECTION_TOOL=/home1/ckim14/tigris_tools/scripts/tigris-projections-all
+PRODUCT_TOOL=/home1/ckim14/tigris_tools/scripts/tigris-products-all
 SNAPSHOT_DIR="${SNAPSHOT_DIR:-$SAVE_DIR/snapshot}"
+SLICE_FIG_DIR="${SLICE_FIG_DIR:-$SAVE_DIR/cr_slices}"
 MPI_RANKS="${MPI_RANKS:-8}"
 MPIEXEC="${MPIEXEC:-/home1/ckim14/myenv/bin/mpiexec}"
 
@@ -43,8 +45,8 @@ if [[ ! -d "$RUN_DIR" ]]; then
   echo "Run directory not found: $RUN_DIR" >&2
   exit 2
 fi
-if [[ ! -x "$PROJECTION_TOOL" ]]; then
-  echo "Projection command not found or not executable: $PROJECTION_TOOL" >&2
+if [[ ! -x "$PRODUCT_TOOL" ]]; then
+  echo "Product command not found or not executable: $PRODUCT_TOOL" >&2
   exit 2
 fi
 if [[ ! -x "$MPIEXEC" ]]; then
@@ -52,10 +54,16 @@ if [[ ! -x "$MPIEXEC" ]]; then
   exit 2
 fi
 
-mkdir -p "$SAVE_DIR" "$SNAPSHOT_DIR" "$MPLCONFIGDIR"
+mkdir -p "$SAVE_DIR" "$SNAPSHOT_DIR" "$SLICE_FIG_DIR" "$MPLCONFIGDIR"
 cd "$RUN_DIR"
 
-args=("$RUN_DIR" --prefix "$RESTART_PREFIX" --savdir "$SAVE_DIR" --figdir "$SNAPSHOT_DIR")
+args=(
+  "$RUN_DIR"
+  --prefix "$RESTART_PREFIX"
+  --savdir "$SAVE_DIR"
+  --figdir "$SNAPSHOT_DIR"
+  --slice-figdir "$SLICE_FIG_DIR"
+)
 if [[ -n "${START_NUM:-}" ]]; then
   args+=(--start "$START_NUM")
 fi
@@ -70,13 +78,14 @@ echo "PBS job: ${PBS_JOBID:-interactive}"
 echo "Run directory: $RUN_DIR"
 echo "Cache directory: $SAVE_DIR"
 echo "Snapshot directory: $SNAPSHOT_DIR"
+echo "Slice-figure directory: $SLICE_FIG_DIR"
 echo "MPI ranks: $MPI_RANKS"
 echo "MPI launcher: $MPIEXEC"
 echo "Start time: $(date -Is)"
 df -h "$SAVE_DIR"
 
-"$PROJECTION_TOOL" "${args[@]}" --dry-run
-"$MPIEXEC" -n "$MPI_RANKS" "$PROJECTION_TOOL" "${args[@]}" -v
+"$PRODUCT_TOOL" "${args[@]}" --dry-run
+"$MPIEXEC" -n "$MPI_RANKS" "$PRODUCT_TOOL" "${args[@]}" -v
 
 echo "Finish time: $(date -Is)"
 df -h "$SAVE_DIR"

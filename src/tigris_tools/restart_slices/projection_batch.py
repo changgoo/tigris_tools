@@ -9,24 +9,28 @@ from tigris_tools.refine_restart.reader import RestartFormatError, read_restart_
 
 from .batch import discover_numbered_restarts, discover_particle_files, match_particle_file
 from .cache import cache_is_fresh, projection_cache_path, slice_cache_path
-from .netcdf import write_projection_caches
+from .netcdf import write_projection_caches, write_slice_caches
 from .projection import extract_particles, extract_projections
 from .snapshot_plot import snapshot_figure_path, write_snapshot_plot
+from .summary_plot import figure_path as slice_figure_path
+from .summary_plot import write_summary_plot
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="tigris-projections-all",
-        description="Generate projection caches and snapshot figures from numbered restarts",
+        prog="tigris-products-all",
+        description="Generate slice/projection caches and figures from numbered restarts",
     )
     parser.add_argument("restart_dir", type=Path)
     parser.add_argument("--savdir", type=Path, required=True)
     parser.add_argument("--figdir", type=Path)
+    parser.add_argument("--slice-figdir", type=Path)
     parser.add_argument("--prefix")
     parser.add_argument("--start", type=int)
     parser.add_argument("--stop", type=int)
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-snapshot", action="store_true")
+    parser.add_argument("--no-slice-summary", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -39,39 +43,58 @@ def main(argv: list[str] | None = None) -> int:
     rank = 0 if comm is None else comm.Get_rank()
     size = 1 if comm is None else comm.Get_size()
     figdir = args.figdir or args.savdir / "snapshot"
+    slice_figdir = args.slice_figdir or args.savdir / "cr_slices"
     restarts = discover_numbered_restarts(
         args.restart_dir, prefix=args.prefix, start=args.start, stop=args.stop
     )
     if not restarts:
-        raise SystemExit(f"tigris-projections-all: no numbered restarts in {args.restart_dir}")
+        raise SystemExit(f"tigris-products-all: no numbered restarts in {args.restart_dir}")
     particle_files = discover_particle_files(
         args.restart_dir, verbose=args.verbose and rank == 0
     )
-    completed = skipped = figures = 0
+    completed = skipped = figures = slice_figures = 0
     failures = []
     if rank == 0:
-        print(f"tigris-projections-all: MPI ranks={size}", flush=True)
+        print(f"tigris-products-all: MPI ranks={size}", flush=True)
     for position, item in enumerate(restarts, 1):
         projection_paths = {
             axis: projection_cache_path(args.savdir, axis, item.num) for axis in ("y", "z")
         }
+        slice_paths = {
+            axis: slice_cache_path(args.savdir, axis, item.num) for axis in ("y", "z")
+        }
         projections_fresh = not args.overwrite and all(
             cache_is_fresh(path, item.path) for path in projection_paths.values()
         )
+        slices_fresh = not args.overwrite and all(
+            cache_is_fresh(path, item.path) for path in slice_paths.values()
+        )
+        caches_fresh = projections_fresh and slices_fresh
         output = snapshot_figure_path(figdir, item.num)
+        slice_output = slice_figure_path(slice_figdir, args.restart_dir.name, item.num)
         figure_inputs = [
             *projection_paths.values(),
-            *(slice_cache_path(args.savdir, axis, item.num) for axis in ("y", "z")),
+            *slice_paths.values(),
         ]
         figure_fresh = (
             not args.overwrite
             and output.is_file()
             and all(path.is_file() and output.stat().st_mtime > path.stat().st_mtime for path in figure_inputs)
         )
-        mode = "fresh" if projections_fresh else "generate"
+        slice_figure_fresh = (
+            not args.overwrite
+            and slice_output.is_file()
+            and all(
+                path.is_file() and slice_output.stat().st_mtime > path.stat().st_mtime
+                for path in slice_paths.values()
+            )
+        )
+        mode = "fresh" if caches_fresh else "generate"
         if rank == 0:
             print(
-                f"[{position}/{len(restarts)}] {item.path.name}: projections={mode}",
+                f"[{position}/{len(restarts)}] {item.path.name}: "
+                f"slices={'fresh' if slices_fresh else mode} "
+                f"projections={'fresh' if projections_fresh else mode}",
                 flush=True,
             )
         if args.dry_run:
@@ -101,13 +124,14 @@ def main(argv: list[str] | None = None) -> int:
 
         result = None
         projection_error = None
-        if not projections_fresh:
+        if not caches_fresh:
             try:
                 result = extract_projections(
                     item.path,
                     particle_path=particle_path,
                     verbose=args.verbose,
                     comm=comm,
+                    include_slices=True,
                 )
             except Exception as exc:
                 projection_error = f"{type(exc).__name__}: {exc}"
@@ -118,30 +142,40 @@ def main(argv: list[str] | None = None) -> int:
         root_error = projection_error
         if rank == 0 and root_error is None:
             try:
-                if projections_fresh:
+                if caches_fresh:
                     skipped += 1
                 else:
                     assert result is not None
+                    assert result.slices is not None
                     projection_paths = write_projection_caches(
                         result, args.savdir, item.num, overwrite=True
                     )
+                    slice_paths = write_slice_caches(
+                        result.slices, args.savdir, item.num, overwrite=True
+                    )
                     completed += 1
+                    print(
+                        f"  wrote {slice_paths['z']} and {slice_paths['y']}",
+                        flush=True,
+                    )
                     print(
                         f"  wrote {projection_paths['z']} and {projection_paths['y']}",
                         flush=True,
                     )
+                if not args.no_slice_summary and not slice_figure_fresh:
+                    write_summary_plot(
+                        slice_paths["y"],
+                        slice_paths["z"],
+                        item.path,
+                        slice_output,
+                    )
+                    slice_figures += 1
+                    print(f"  wrote {slice_output}", flush=True)
                 if not args.no_snapshot and not figure_fresh:
-                    slices = {
-                        axis: slice_cache_path(args.savdir, axis, item.num)
-                        for axis in ("y", "z")
-                    }
-                    missing = [str(path) for path in slices.values() if not path.is_file()]
-                    if missing:
-                        raise FileNotFoundError(f"snapshot requires slice caches: {missing}")
                     particles = extract_particles(item.path, particle_path=particle_path)
                     write_snapshot_plot(
-                        slices["y"],
-                        slices["z"],
+                        slice_paths["y"],
+                        slice_paths["z"],
                         projection_paths["y"],
                         projection_paths["z"],
                         item.path,
@@ -170,10 +204,12 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "found": len(restarts),
                     "mpi_ranks": size,
-                    "projections_completed": completed,
-                    "projections_skipped_fresh": skipped,
-                    "figures_completed": figures,
-                    "figdir": str(figdir),
+                    "cache_sets_completed": completed,
+                    "cache_sets_skipped_fresh": skipped,
+                    "slice_figures_completed": slice_figures,
+                    "snapshot_figures_completed": figures,
+                    "slice_figdir": str(slice_figdir),
+                    "snapshot_figdir": str(figdir),
                     "dry_run": args.dry_run,
                     "failures": failures,
                 },

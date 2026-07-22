@@ -14,8 +14,12 @@ from tigris_tools.refine_restart.convert import _fixed_payload_sizes, _parse_pay
 
 from .extract import (
     RestartSource,
+    SliceResult,
     _cell_coordinates,
+    _field_names,
+    _nearest_index,
     _reconstruct_block,
+    _require_complete,
     _require_uniform_cartesian,
 )
 
@@ -53,6 +57,7 @@ class ProjectionResult:
     cycle: int
     particles: ParticleData
     recovery: object | None
+    slices: SliceResult | None = None
 
 
 def extract_particles(
@@ -200,6 +205,7 @@ def extract_projections(
     particle_path: str | Path | None = None,
     verbose: bool = False,
     comm=None,
+    include_slices: bool = False,
 ) -> ProjectionResult:
     """Stream root meshblocks into y/z projections, optionally across MPI ranks.
 
@@ -218,6 +224,7 @@ def extract_projections(
         schema = source.schema
         _require_uniform_cartesian(index, schema)
         coords = _cell_coordinates(index)
+        selected = {axis: _nearest_index(coords[axis], 0.0) for axis in ("y", "z")}
         units = projection_units(index.params)
         gamma = index.params.get_float("hydro", "gamma")
         if gamma is None:
@@ -229,6 +236,7 @@ def extract_projections(
         projections: dict[str, dict[str, dict[str, np.ndarray]]] = {
             axis: {phase: {} for phase in PHASES} for axis in ("z", "y")
         }
+        local_slice_tiles = []
         bx, by, bz = schema.block_size
         g = layout.NGHOST
         cr_reconstructor = None
@@ -263,6 +271,10 @@ def extract_projections(
                 _accumulate_block(
                     projections, per_cell, masks, block.loc, schema.block_size, spacing, shapes
                 )
+                if include_slices:
+                    local_slice_tiles.extend(
+                        _slice_tiles(active, block.loc, schema.block_size, selected)
+                    )
                 if verbose and rank == 0 and (
                     number % 128 == 0 or number == len(local_blocks)
                 ):
@@ -280,8 +292,32 @@ def extract_projections(
             if failures:
                 raise RuntimeError("MPI projection failure: " + "; ".join(failures))
             projections = _reduce_projections(projections, comm)
+            gathered_tiles = comm.gather(local_slice_tiles, root=0) if include_slices else None
         elif local_error is not None:
             raise RuntimeError(local_error)
+        else:
+            gathered_tiles = [local_slice_tiles] if include_slices else None
+
+        slices = None
+        if rank == 0 and include_slices:
+            assert gathered_tiles is not None
+            planes = _assemble_slice_tiles(
+                gathered_tiles,
+                _field_names(index, schema),
+                {"z": shapes["z"], "y": shapes["y"]},
+            )
+            _require_complete(planes)
+            slices = SliceResult(
+                planes=planes,
+                coordinates=coords,
+                time=index.header.time,
+                cycle=index.header.ncycle,
+                selected_indices=selected,
+                selected_coordinates={
+                    axis: float(coords[axis][cell]) for axis, cell in selected.items()
+                },
+                recovery=source.recovery,
+            )
 
         return ProjectionResult(
             projections=projections,
@@ -290,6 +326,7 @@ def extract_projections(
             cycle=index.header.ncycle,
             particles=ParticleData.empty(schema.particle_nint, schema.particle_nreal),
             recovery=source.recovery,
+            slices=slices,
         )
 
 
@@ -323,6 +360,44 @@ def _block_range(count: int, rank: int, size: int) -> tuple[int, int]:
     if size < 1 or not 0 <= rank < size:
         raise ValueError(f"invalid MPI rank/size: rank={rank}, size={size}")
     return count * rank // size, count * (rank + 1) // size
+
+
+def _slice_tiles(fields, loc, block_size, selected):
+    """Copy only central-plane tiles so block-sized 3D arrays can be released."""
+
+    bx, by, bz = block_size
+    x0, y0, z0 = loc.lx1 * bx, loc.lx2 * by, loc.lx3 * bz
+    tiles = []
+    if z0 <= selected["z"] < z0 + bz:
+        local_z = selected["z"] - z0
+        tiles.append(
+            ("z", y0, x0, {name: values[local_z, :, :].copy() for name, values in fields.items()})
+        )
+    if y0 <= selected["y"] < y0 + by:
+        local_y = selected["y"] - y0
+        tiles.append(
+            ("y", z0, x0, {name: values[:, local_y, :].copy() for name, values in fields.items()})
+        )
+    return tiles
+
+
+def _assemble_slice_tiles(tile_groups, field_names, shapes):
+    planes = {
+        axis: {
+            name: np.full(shapes[axis], np.nan, dtype=np.float64) for name in field_names
+        }
+        for axis in ("z", "y")
+    }
+    for tiles in tile_groups:
+        for axis, row, column, fields in tiles:
+            sample = next(iter(fields.values()))
+            target = (
+                slice(row, row + sample.shape[0]),
+                slice(column, column + sample.shape[1]),
+            )
+            for name, values in fields.items():
+                planes[axis][name][target] = values
+    return planes
 
 
 def _accumulate_block(

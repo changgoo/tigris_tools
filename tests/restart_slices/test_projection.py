@@ -3,7 +3,9 @@ import numpy as np
 from tigris_tools.restart_slices.projection import (
     ProjectionUnits,
     _accumulate_block,
+    _assemble_slice_tiles,
     _block_range,
+    _slice_tiles,
     derive_projection_fields,
 )
 
@@ -70,3 +72,16 @@ def test_mpi_block_ranges_are_contiguous_balanced_and_complete():
     assert max(stop - start for start, stop in ranges) - min(
         stop - start for start, stop in ranges
     ) <= 1
+
+
+def test_slice_tiles_assemble_both_central_planes():
+    values = np.arange(8, dtype=float).reshape(2, 2, 2)
+    fields = {"density": values, "pressure": values + 10.0}
+    loc = type("Location", (), {"lx1": 0, "lx2": 0, "lx3": 0})()
+
+    tiles = _slice_tiles(fields, loc, (2, 2, 2), {"y": 1, "z": 0})
+    planes = _assemble_slice_tiles([tiles], list(fields), {"z": (2, 2), "y": (2, 2)})
+
+    np.testing.assert_array_equal(planes["z"]["density"], values[0, :, :])
+    np.testing.assert_array_equal(planes["y"]["density"], values[:, 1, :])
+    np.testing.assert_array_equal(planes["z"]["pressure"], values[0, :, :] + 10.0)

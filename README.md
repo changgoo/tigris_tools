@@ -155,11 +155,11 @@ Figures are written to `$run/cr_slices/<run-name>_NNNN.png`. The command skips
 fresh figures, continues past missing cache pairs, and accepts `--start`,
 `--stop`, `--figdir`, and `--overwrite`.
 
-Generate the `prj.y` and `prj.z` NetCDF caches and the default 13-panel
-`plot_snapshot` figure directly from each restart:
+Generate both central-slice caches, both projection caches, the eight-panel
+slice summary, and the default 13-panel snapshot in one restart read:
 
 ```sh
-tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+tigris-products-all "$run" --prefix TIGRESS --savdir "$run"
 ```
 
 Projection caches use the same `phase=(whole,hot,wc)` schema and physical units
@@ -168,31 +168,26 @@ as `TIGRESS-CR/python/slc_prj.py`. Snapshot figures are written to
 particle records embedded in each restart. To redraw snapshots from existing
 slice and projection caches, use `tigris-plot-snapshots-all`.
 
-Projection extraction automatically uses MPI when launched with `mpiexec`.
+The older `tigris-projections-all` name remains an alias for compatibility.
+Product extraction automatically uses MPI when launched with `mpiexec`.
 Ranks read disjoint contiguous meshblock ranges, then sum their two-dimensional
-accumulators onto rank zero. NetCDF writing and plotting remain rank-zero-only:
+projection accumulators and gather central-plane tiles onto rank zero. NetCDF
+writing and plotting remain rank-zero-only:
 
 ```sh
-mpiexec -n 8 tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+mpiexec -n 8 tigris-products-all "$run" --prefix TIGRESS --savdir "$run"
 ```
 
-A ready-to-submit NAS PBS job is provided at
-[`pbs/generate_all_restart_slices.pbs`](pbs/generate_all_restart_slices.pbs):
-
-```sh
-qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_slices.pbs
-```
-
-The PBS job runs both cache generation and standalone figure generation. Set
-`FIG_DIR` to change the figure directory or `PLOT_OVERWRITE=1` to redraw fresh
-figures.
-
-After slice generation finishes, submit the independent resumable eight-rank
-projection job:
+The combined resumable eight-rank job replaces separate slice and projection
+submissions:
 
 ```sh
 qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
 ```
+
+It writes slice figures under `$run/cr_slices/` and snapshot figures under
+`$run/snapshot/`. The older `generate_all_restart_slices.pbs` remains available
+when only serial slice products are wanted.
 
 ## Development
 

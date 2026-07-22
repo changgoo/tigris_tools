@@ -65,16 +65,19 @@ the command continues to render every available output.
 
 ## Projections and snapshots
 
-The second milestone streams all meshblocks once and writes both projection
-caches while retaining only two-dimensional accumulators in memory:
+The combined product command streams every meshblock once and writes both slice
+caches and both projection caches while retaining only two-dimensional
+accumulators and central-plane tiles in memory:
 
 ```sh
-tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+tigris-products-all "$run" --prefix TIGRESS --savdir "$run"
 ```
 
 For output 30 the cache paths are:
 
 ```text
+<savdir>/allslc.z/allslc.z.00030.nc
+<savdir>/allslc.y/allslc.y.00030.nc
 <savdir>/prj.z/prj.z.00030.nc
 <savdir>/prj.y/prj.y.00030.nc
 ```
@@ -86,21 +89,25 @@ runs additionally receive the component surface densities and emission
 measure. Surface quantities are line-of-sight integrals; fluxes are
 line-of-sight averages, matching `slc_prj.py`.
 
-Unless `--no-snapshot` is passed, the same command writes
-`<savdir>/snapshot/snapshot_NNNNN.png`. It reproduces the default
+Unless the corresponding plotting option is disabled, the same command writes
+`<savdir>/cr_slices/<run-name>_NNNN.png` and
+`<savdir>/snapshot/snapshot_NNNNN.png`. The snapshot reproduces the default
 `plot_snapshot` field layout and uses the exact particles embedded in the
 restart rather than selecting a nearby particle output. Existing compatible
 caches and figures are skipped unless `--overwrite` is given.
 
-When invoked under MPI, numbered restarts are still processed sequentially to
+`tigris-projections-all` remains a compatibility alias. When invoked under MPI,
+numbered restarts are still processed sequentially to
 keep memory bounded. For each restart, ranks open the file read-only and read
 disjoint contiguous meshblock ranges. Each rank constructs local y/z
-accumulators; `MPI_Reduce` sums every field and phase onto rank zero. Only rank
-zero writes NetCDF files, reads the lightweight embedded-particle records, and
-plots the snapshot. A normal invocation remains a supported one-rank fallback:
+projection accumulators and copies only tiles intersecting the central y/z
+planes. `MPI_Reduce` sums every projection field and phase onto rank zero, while
+the slice tiles are gathered and assembled there. Only rank zero writes the four
+NetCDF files, reads the lightweight embedded-particle records, and renders both
+figures. A normal invocation remains a supported one-rank fallback:
 
 ```sh
-mpiexec -n 8 tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+mpiexec -n 8 tigris-products-all "$run" --prefix TIGRESS --savdir "$run"
 ```
 
 The NAS job for this stage is:
