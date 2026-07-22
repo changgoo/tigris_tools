@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .cache import slice_cache_path
+import numpy as np
+
+from .cache import projection_cache_path, slice_cache_path
 from .extract import SliceResult
+from .projection import PHASES, ProjectionResult
 
 
 def write_slice_caches(
@@ -31,6 +34,53 @@ def write_slice_caches(
         dims = ("y", "x") if axis == "z" else ("z", "x")
         coordinates = {dim: result.coordinates[dim] for dim in dims}
         data_vars = {name: (dims, values) for name, values in result.planes[axis].items()}
+        dataset = xr.Dataset(data_vars=data_vars, coords=coordinates, attrs={"time": result.time})
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        try:
+            dataset.to_netcdf(temporary)
+            temporary.replace(path)
+        finally:
+            dataset.close()
+            temporary.unlink(missing_ok=True)
+        paths[axis] = path
+    return paths
+
+
+def write_projection_caches(
+    result: ProjectionResult,
+    savdir: str | Path,
+    num: int,
+    *,
+    overwrite: bool = False,
+) -> dict[str, Path]:
+    """Write y and z projections using the ``SliceProj.get_prj`` schema."""
+
+    try:
+        import xarray as xr
+    except ImportError as exc:
+        raise RuntimeError(
+            "projection cache output requires xarray; install tigris-tools[slices]"
+        ) from exc
+
+    paths: dict[str, Path] = {}
+    for axis in ("z", "y"):
+        path = projection_cache_path(savdir, axis, num)
+        if path.exists() and not overwrite:
+            raise FileExistsError(f"refusing to overwrite existing cache: {path}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        dims = ("y", "x") if axis == "z" else ("z", "x")
+        coordinates = {
+            "phase": list(PHASES),
+            **{dim: result.coordinates[dim] for dim in dims},
+        }
+        names = list(result.projections[axis][PHASES[0]])
+        data_vars = {
+            name: (
+                ("phase", *dims),
+                np.stack([result.projections[axis][phase][name] for phase in PHASES]),
+            )
+            for name in names
+        }
         dataset = xr.Dataset(data_vars=data_vars, coords=coordinates, attrs={"time": result.time})
         temporary = path.with_suffix(path.suffix + ".tmp")
         try:

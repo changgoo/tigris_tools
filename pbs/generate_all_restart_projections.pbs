@@ -1,0 +1,74 @@
+#!/bin/bash
+#PBS -N rst-prj
+#PBS -q normal
+#PBS -l select=1:ncpus=1:mpiprocs=1:model=tur_ath
+#PBS -l walltime=004:00:00
+#PBS -j oe
+#PBS -m abe
+#PBS -M changgookim@gmail.com
+
+# Generate pyathena-compatible y/z projection caches and plot_snapshot-style
+# figures for every numbered restart. Both outputs are resumable.
+#
+# Submit after the slice-cache job finishes:
+#   qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
+#
+# Restrict the inclusive range when needed:
+#   qsub -v START_NUM=30,STOP_NUM=42 \
+#     /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
+
+set -euo pipefail
+
+RUN_DIR="${RUN_DIR:-/nobackup/ckim14/tigress_classic/crmhd_duale-8pc-R16_tall-rst}"
+SAVE_DIR="${SAVE_DIR:-$RUN_DIR}"
+RESTART_PREFIX="${RESTART_PREFIX:-TIGRESS}"
+PROJECTION_TOOL=/home1/ckim14/tigris_tools/scripts/tigris-projections-all
+SNAPSHOT_DIR="${SNAPSHOT_DIR:-$SAVE_DIR/snapshot}"
+
+module purge
+module load PrgEnv-cray cray-pals cray-libpals craype-x86-turin perftools-base \
+  cray-hdf5-parallel cray-fftw
+module switch PrgEnv-cray PrgEnv-gnu
+
+export PYTHONUNBUFFERED=1
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export MPLBACKEND=Agg
+export MPLCONFIGDIR="${TMPDIR:-/tmp}/tigris-matplotlib-${PBS_JOBID:-$$}"
+
+if [[ ! -d "$RUN_DIR" ]]; then
+  echo "Run directory not found: $RUN_DIR" >&2
+  exit 2
+fi
+if [[ ! -x "$PROJECTION_TOOL" ]]; then
+  echo "Projection command not found or not executable: $PROJECTION_TOOL" >&2
+  exit 2
+fi
+
+mkdir -p "$SAVE_DIR" "$SNAPSHOT_DIR" "$MPLCONFIGDIR"
+cd "$RUN_DIR"
+
+args=("$RUN_DIR" --prefix "$RESTART_PREFIX" --savdir "$SAVE_DIR" --figdir "$SNAPSHOT_DIR")
+if [[ -n "${START_NUM:-}" ]]; then
+  args+=(--start "$START_NUM")
+fi
+if [[ -n "${STOP_NUM:-}" ]]; then
+  args+=(--stop "$STOP_NUM")
+fi
+if [[ "${OVERWRITE:-0}" == "1" ]]; then
+  args+=(--overwrite)
+fi
+
+echo "PBS job: ${PBS_JOBID:-interactive}"
+echo "Run directory: $RUN_DIR"
+echo "Cache directory: $SAVE_DIR"
+echo "Snapshot directory: $SNAPSHOT_DIR"
+echo "Start time: $(date -Is)"
+df -h "$SAVE_DIR"
+
+"$PROJECTION_TOOL" "${args[@]}" --dry-run
+"$PROJECTION_TOOL" "${args[@]}" -v
+
+echo "Finish time: $(date -Is)"
+df -h "$SAVE_DIR"

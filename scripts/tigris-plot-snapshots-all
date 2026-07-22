@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_path=$(readlink -f "$0")
+repo_dir=$(cd "$(dirname "$script_path")/.." && pwd)
+export PYTHONPATH="$repo_dir/src${PYTHONPATH:+:$PYTHONPATH}"
+exec /home1/ckim14/myenv/bin/python -m tigris_tools.restart_slices.snapshot_plot "$@"

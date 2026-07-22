@@ -63,6 +63,41 @@ By default this writes `$run/cr_slices/<run-name>_NNNN.png`. Existing figures
 newer than both input caches are skipped. Missing cache pairs are reported while
 the command continues to render every available output.
 
+## Projections and snapshots
+
+The second milestone streams all meshblocks once and writes both projection
+caches while retaining only two-dimensional accumulators in memory:
+
+```sh
+tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+```
+
+For output 30 the cache paths are:
+
+```text
+<savdir>/prj.z/prj.z.00030.nc
+<savdir>/prj.y/prj.y.00030.nc
+```
+
+Each dataset has `phase = whole, hot, wc`, a `time` attribute, and the same
+available variables as `SliceProj.get_prj`: `Sigma`, mass/thermal/kinetic/metal
+fluxes, and CR total/diffusive/advective/streaming energy fluxes. Photochemical
+runs additionally receive the component surface densities and emission
+measure. Surface quantities are line-of-sight integrals; fluxes are
+line-of-sight averages, matching `slc_prj.py`.
+
+Unless `--no-snapshot` is passed, the same command writes
+`<savdir>/snapshot/snapshot_NNNNN.png`. It reproduces the default
+`plot_snapshot` field layout and uses the exact particles embedded in the
+restart rather than selecting a nearby particle output. Existing compatible
+caches and figures are skipped unless `--overwrite` is given.
+
+The NAS job for this stage is:
+
+```sh
+qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
+```
+
 ## Compatibility contract
 
 The cache contract follows `pyathena_tigris.LoadSim.Decorators.check_netcdf`.

@@ -27,6 +27,8 @@ refine-restart = "tigris_tools.refine_restart.cli:main"
 repair-restart = "tigris_tools.restart_slices.repair_cli:main"
 repair-restarts-all = "tigris_tools.restart_slices.repair_batch:main"
 tigris-plot-slices-all = "tigris_tools.restart_slices.summary_plot:main"
+tigris-plot-snapshots-all = "tigris_tools.restart_slices.snapshot_plot:main"
+tigris-projections-all = "tigris_tools.restart_slices.projection_batch:main"
 tigris-slices = "tigris_tools.restart_slices.cli:main"
 tigris-slices-all = "tigris_tools.restart_slices.batch:main"
 

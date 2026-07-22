@@ -2,7 +2,11 @@ import os
 
 import pytest
 
-from tigris_tools.restart_slices.cache import cache_is_fresh, slice_cache_path
+from tigris_tools.restart_slices.cache import (
+    cache_is_fresh,
+    projection_cache_path,
+    slice_cache_path,
+)
 
 
 def test_slice_cache_path_matches_pyathena_tigris(tmp_path):
@@ -15,6 +19,13 @@ def test_slice_cache_path_matches_pyathena_tigris(tmp_path):
 def test_slice_cache_path_supports_filebase(tmp_path):
     assert slice_cache_path(tmp_path, "z", 3, filebase="central") == (
         tmp_path / "allslc.z" / "central.00003.nc"
+    )
+
+
+def test_projection_cache_path_matches_pyathena_tigris(tmp_path):
+    assert projection_cache_path(tmp_path, "z", 25) == tmp_path / "prj.z" / "prj.z.00025.nc"
+    assert projection_cache_path(tmp_path, "y", 25, outid=2) == (
+        tmp_path / "prj.y" / "prj.y.out2.00025.nc"
     )
 
 

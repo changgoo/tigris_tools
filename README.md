@@ -153,6 +153,19 @@ Figures are written to `$run/cr_slices/<run-name>_NNNN.png`. The command skips
 fresh figures, continues past missing cache pairs, and accepts `--start`,
 `--stop`, `--figdir`, and `--overwrite`.
 
+Generate the `prj.y` and `prj.z` NetCDF caches and the default 13-panel
+`plot_snapshot` figure directly from each restart:
+
+```sh
+tigris-projections-all "$run" --prefix TIGRESS --savdir "$run"
+```
+
+Projection caches use the same `phase=(whole,hot,wc)` schema and physical units
+as `TIGRESS-CR/python/slc_prj.py`. Snapshot figures are written to
+`$run/snapshot/snapshot_NNNNN.png`; their particle overlays come from the exact
+particle records embedded in each restart. To redraw snapshots from existing
+slice and projection caches, use `tigris-plot-snapshots-all`.
+
 A ready-to-submit NAS PBS job is provided at
 [`pbs/generate_all_restart_slices.pbs`](pbs/generate_all_restart_slices.pbs):
 
@@ -163,6 +176,13 @@ qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_slices.pbs
 The PBS job runs both cache generation and standalone figure generation. Set
 `FIG_DIR` to change the figure directory or `PLOT_OVERWRITE=1` to redraw fresh
 figures.
+
+After slice generation finishes, submit the independent resumable projection
+job:
+
+```sh
+qsub /home1/ckim14/tigris_tools/pbs/generate_all_restart_projections.pbs
+```
 
 ## Development
 

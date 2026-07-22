@@ -28,6 +28,8 @@ SCALAR_NAMES = {
     "IEL": "EL",
 }
 
+SCALAR_OUTPUT_NAMES = {"rHI": "xHI", "rH2": "xH2", "rEL": "xe"}
+
 
 @dataclass(frozen=True)
 class SliceResult:
@@ -252,7 +254,8 @@ def _reconstruct_block(
             np.maximum(payload["scalars"], scalar_floor * density_primitive) / density_primitive
         )
         for scalar_index, name in enumerate(scalar_names):
-            fields[f"r{name}"] = primitive[scalar_index]
+            raw_name = f"r{name}"
+            fields[SCALAR_OUTPUT_NAMES.get(raw_name, raw_name)] = primitive[scalar_index]
     return fields
 
 
@@ -288,7 +291,9 @@ def _field_names(index: RestartIndex, schema: RestartSchema) -> list[str]:
                     *(f"{group}-Vd{component}" for component in range(1, 4)),
                 ]
             )
-    names.extend(f"r{name}" for name in _scalar_names(index, schema.nscalars))
+    for name in _scalar_names(index, schema.nscalars):
+        raw_name = f"r{name}"
+        names.append(SCALAR_OUTPUT_NAMES.get(raw_name, raw_name))
     return names
 
 
